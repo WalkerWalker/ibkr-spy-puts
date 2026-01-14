@@ -97,6 +97,14 @@
             background: #0f3460;
             color: #00d4ff;
         }
+        .status.verified {
+            background: #0f4030;
+            color: #00ff88;
+        }
+        .status.unverified {
+            background: #3f3000;
+            color: #ffaa00;
+        }
         .status.filled {
             background: #0f4030;
             color: #00ff88;
@@ -223,26 +231,35 @@
             margin-left: 10px;
         }
 
-        /* OCA Group styles */
-        .oca-group-header {
-            background: #0f1a30;
-            padding: 8px 10px;
-            font-size: 12px;
-            color: #00d4ff;
-            font-weight: 500;
-            border-bottom: 1px solid #0f3460;
+        /* OCA bracket styles */
+        .oca-bracket {
+            position: relative;
         }
-        .oca-group-header .oca-badge {
-            background: #0f3460;
-            padding: 2px 6px;
-            border-radius: 4px;
-            margin-right: 8px;
+        .oca-bracket::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: #00d4ff;
+            border-radius: 2px;
         }
-        tr.oca-grouped {
-            background: #0a1525;
+        .oca-bracket td:first-child {
+            padding-left: 15px;
         }
-        tr.oca-grouped:hover {
-            background: #0f1a30;
+        .oca-first::before {
+            top: 50%;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+        }
+        .oca-last::before {
+            bottom: 50%;
+            border-bottom-left-radius: 4px;
+            border-bottom-right-radius: 4px;
+        }
+        .oca-middle::before {
+            border-radius: 0;
         }
 
         /* Last check time */
@@ -250,6 +267,16 @@
             font-size: 11px;
             color: #555;
             margin-left: 10px;
+        }
+
+        /* Verified icon */
+        .verified-icon {
+            color: #00ff88;
+            margin-left: 5px;
+        }
+        .unverified-icon {
+            color: #ffaa00;
+            margin-left: 5px;
         }
     </style>
 </head>
@@ -365,11 +392,11 @@
         </div>
     </div>
 
-    <!-- Open Positions Table (Collapsible) - MOVED BEFORE ORDERS -->
+    <!-- Open Positions Table (Collapsible) -->
     <div class="card">
         <div class="collapsible-header" onclick="toggleSection('positions')">
             <h2>
-                Open Positions (Database)
+                Open Positions
                 <span class="section-count">{{ positions|length }}</span>
             </h2>
             <span class="collapse-icon">&#9660;</span>
@@ -392,6 +419,12 @@
                 </thead>
                 <tbody>
                     {% for pos in positions %}
+                    {% set is_verified = false %}
+                    {% for ibkr_pos in ibkr_positions %}
+                        {% if ibkr_pos.symbol == pos.symbol and ibkr_pos.strike == pos.strike and ibkr_pos.expiration == pos.expiration|replace('-', '') %}
+                            {% set is_verified = true %}
+                        {% endif %}
+                    {% endfor %}
                     <tr>
                         <td>{{ pos.symbol }}</td>
                         <td>${{ "%.2f"|format(pos.strike) }}</td>
@@ -402,7 +435,15 @@
                         <td>${{ "%.2f"|format(pos.entry_price) }}</td>
                         <td class="positive">${{ "%.2f"|format(pos.expected_tp_price) }}</td>
                         <td class="negative">${{ "%.2f"|format(pos.expected_sl_price) }}</td>
-                        <td><span class="status open">{{ pos.status }}</span></td>
+                        <td>
+                            {% if is_verified %}
+                                <span class="status verified">Live</span>
+                            {% elif connection.ready_to_trade %}
+                                <span class="status unverified">DB Only</span>
+                            {% else %}
+                                <span class="status open">Open</span>
+                            {% endif %}
+                        </td>
                     </tr>
                     {% endfor %}
                     {% if not positions %}
@@ -415,11 +456,11 @@
         </div>
     </div>
 
-    <!-- Live Orders from IBKR (Collapsible) - WITH OCA GROUPING -->
+    <!-- Live Orders (Collapsible) -->
     <div class="card">
         <div class="collapsible-header" onclick="toggleSection('live-orders')">
             <h2>
-                Live Orders (IBKR)
+                Live Orders
                 <span class="section-count">{{ live_orders|length }}</span>
             </h2>
             <span class="collapse-icon">&#9660;</span>
@@ -428,7 +469,6 @@
             <table>
                 <thead>
                     <tr>
-                        <th>Order ID</th>
                         <th>Symbol</th>
                         <th>Strike</th>
                         <th>Exp</th>
@@ -439,37 +479,34 @@
                         <th>Stop</th>
                         <th>Status</th>
                         <th>Filled</th>
-                        <th>OCA Group</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% set ns = namespace(current_oca='', oca_colors={}) %}
-                    {% set oca_color_list = ['#1a3a5c', '#1a4a3c', '#3a1a4c', '#4c3a1a', '#1a4c4c'] %}
-                    {% set ns.color_idx = 0 %}
-
                     {# Group orders by OCA #}
                     {% set orders_by_oca = {} %}
                     {% for order in live_orders %}
-                        {% set oca = order.oca_group or 'none' %}
+                        {% set oca = order.oca_group or 'none_' ~ loop.index %}
                         {% if oca not in orders_by_oca %}
                             {% set _ = orders_by_oca.__setitem__(oca, []) %}
                         {% endif %}
                         {% set _ = orders_by_oca[oca].append(order) %}
                     {% endfor %}
 
-                    {# Render grouped orders #}
+                    {# Render orders with OCA brackets #}
                     {% for oca_group, orders in orders_by_oca.items() %}
-                        {% if oca_group != 'none' and orders|length > 1 %}
-                            <tr class="oca-group-header">
-                                <td colspan="12">
-                                    <span class="oca-badge">OCA</span>
-                                    {{ oca_group }} ({{ orders|length }} orders - one cancels all)
-                                </td>
-                            </tr>
-                        {% endif %}
+                        {% set is_oca = orders|length > 1 and not oca_group.startswith('none_') %}
                         {% for order in orders %}
-                        <tr{% if oca_group != 'none' and orders|length > 1 %} class="oca-grouped"{% endif %}>
-                            <td>{{ order.order_id }}</td>
+                            {% set oca_class = '' %}
+                            {% if is_oca %}
+                                {% if loop.first %}
+                                    {% set oca_class = 'oca-bracket oca-first' %}
+                                {% elif loop.last %}
+                                    {% set oca_class = 'oca-bracket oca-last' %}
+                                {% else %}
+                                    {% set oca_class = 'oca-bracket oca-middle' %}
+                                {% endif %}
+                            {% endif %}
+                        <tr class="{{ oca_class }}">
                             <td>{{ order.symbol }}{% if order.right %} {{ order.right }}{% endif %}</td>
                             <td>{% if order.strike %}${{ "%.0f"|format(order.strike) }}{% else %}-{% endif %}</td>
                             <td>{% if order.expiration %}{{ order.expiration }}{% else %}-{% endif %}</td>
@@ -480,16 +517,15 @@
                             <td>{% if order.stop_price %}${{ "%.2f"|format(order.stop_price) }}{% else %}-{% endif %}</td>
                             <td><span class="status {{ order.status|lower }}">{{ order.status }}</span></td>
                             <td>{{ order.filled }}/{{ order.quantity }}</td>
-                            <td>{% if order.oca_group %}<span class="oca-badge" style="font-size: 10px;">{{ order.oca_group[:8] }}...</span>{% else %}-{% endif %}</td>
                         </tr>
                         {% endfor %}
                     {% endfor %}
 
                     {% if not live_orders %}
                     <tr>
-                        <td colspan="12" style="text-align: center; color: #666;">
+                        <td colspan="10" style="text-align: center; color: #666;">
                             {% if connection.ready_to_trade %}
-                                No open orders in IBKR
+                                No open orders
                             {% else %}
                                 Connect to IBKR to see live orders
                             {% endif %}

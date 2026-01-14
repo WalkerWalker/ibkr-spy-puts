@@ -196,6 +196,7 @@ def _check_connection_via_socket():
             "error": None,
         },
         "live_orders": [],
+        "ibkr_positions": [],
     }
 
     # Simple socket test to check if the port is open
@@ -237,26 +238,27 @@ async def get_connection_and_orders():
             from ibkr_spy_puts.config import TWSSettings
 
             tws_settings = TWSSettings()
-            # Run a quick subprocess to get account info and orders
+            # Run a quick subprocess to get account info, orders, and positions
             script = f'''
 import json
 import asyncio
 asyncio.set_event_loop(asyncio.new_event_loop())
 from ib_insync import IB
 ib = IB()
-result = {{"account": None, "trading_mode": None, "orders": []}}
+result = {{"account": None, "trading_mode": None, "orders": [], "positions": []}}
 try:
     ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=98, readonly=True, timeout=10)
     accounts = ib.managedAccounts()
     if accounts:
         result["account"] = accounts[0]
         result["trading_mode"] = "PAPER" if accounts[0].startswith("DU") else "LIVE"
+
+    # Get open orders
     ib.reqAllOpenOrders()
     ib.sleep(1)
     for trade in ib.openTrades():
         c, o, s = trade.contract, trade.order, trade.orderStatus
         result["orders"].append({{
-            "order_id": o.orderId,
             "symbol": c.symbol,
             "sec_type": c.secType,
             "strike": getattr(c, "strike", None),
@@ -270,9 +272,22 @@ try:
             "status": s.status,
             "filled": int(s.filled),
             "remaining": int(s.remaining),
-            "parent_id": o.parentId if o.parentId else None,
             "oca_group": o.ocaGroup if o.ocaGroup else None,
         }})
+
+    # Get live positions
+    for pos in ib.positions():
+        c = pos.contract
+        if c.secType == "OPT":
+            result["positions"].append({{
+                "symbol": c.symbol,
+                "strike": c.strike,
+                "expiration": c.lastTradeDateOrContractMonth,
+                "right": c.right,
+                "quantity": int(pos.position),
+                "avg_cost": pos.avgCost,
+            }})
+
     ib.disconnect()
 except Exception as e:
     result["error"] = str(e)
@@ -292,6 +307,7 @@ print(json.dumps(result))
                     result["connection"]["trading_mode"] = data.get("trading_mode")
                     result["connection"]["logged_in"] = True
                 result["live_orders"] = data.get("orders", [])
+                result["ibkr_positions"] = data.get("positions", [])
         except Exception as e:
             # Fall back to socket-only result
             result["connection"]["error"] = str(e)
@@ -398,6 +414,7 @@ async def dashboard(request: Request):
                 "risk": risk,
                 "connection": ibkr_data["connection"],
                 "live_orders": ibkr_data["live_orders"],
+                "ibkr_positions": ibkr_data["ibkr_positions"],
                 "now": datetime.now,
             },
         )
