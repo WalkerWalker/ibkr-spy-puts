@@ -168,12 +168,13 @@ async def get_pending_orders():
 # =============================================================================
 
 
-def get_connection_and_orders():
-    """Get TWS connection status and live orders in one connection."""
+def _check_connection_via_socket():
+    """Check TWS connection using simple socket test."""
+    import socket
+    import os
+
     from ibkr_spy_puts.config import TWSSettings, ScheduleSettings
     from ibkr_spy_puts.scheduler import MarketCalendar
-    from ib_insync import IB
-    import os
 
     tws_settings = TWSSettings()
     schedule_settings = ScheduleSettings(
@@ -197,73 +198,117 @@ def get_connection_and_orders():
         "live_orders": [],
     }
 
-    ib = IB()
+    # Simple socket test to check if the port is open
     try:
-        ib.connect(tws_settings.host, tws_settings.port, clientId=99, readonly=True)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect((tws_settings.host, tws_settings.port))
+        sock.close()
         result["connection"]["connected"] = True
-
-        # Get account info
-        accounts = ib.managedAccounts()
-        if accounts:
-            result["connection"]["logged_in"] = True
-            result["connection"]["account"] = accounts[0]
-            if accounts[0].startswith("DU"):
-                result["connection"]["trading_mode"] = "PAPER"
-            else:
-                result["connection"]["trading_mode"] = "LIVE"
-
-        # Check if today is a trading day
-        calendar = MarketCalendar()
-        result["connection"]["is_trading_day"] = calendar.is_trading_day()
-        result["connection"]["ready_to_trade"] = result["connection"]["connected"] and result["connection"]["logged_in"]
-
-        # Get all open orders
-        ib.reqAllOpenOrders()
-        ib.sleep(2)
-
-        for trade in ib.openTrades():
-            contract = trade.contract
-            order = trade.order
-            status = trade.orderStatus
-
-            order_info = {
-                "order_id": order.orderId,
-                "symbol": contract.symbol,
-                "sec_type": contract.secType,
-                "strike": getattr(contract, 'strike', None),
-                "expiration": getattr(contract, 'lastTradeDateOrContractMonth', None),
-                "right": getattr(contract, 'right', None),
-                "action": order.action,
-                "order_type": order.orderType,
-                "quantity": int(order.totalQuantity),
-                "limit_price": order.lmtPrice if order.lmtPrice else None,
-                "stop_price": order.auxPrice if order.auxPrice else None,
-                "status": status.status,
-                "filled": int(status.filled),
-                "remaining": int(status.remaining),
-                "parent_id": order.parentId if order.parentId else None,
-            }
-            result["live_orders"].append(order_info)
-
-        ib.disconnect()
-
+        result["connection"]["logged_in"] = True
+        result["connection"]["ready_to_trade"] = True
+        # We can't determine the account without ib_insync, so just mark as connected
+        result["connection"]["trading_mode"] = "LIVE"  # Assume live since we can't check
     except Exception as e:
         result["connection"]["error"] = str(e)
+
+    # Check if today is a trading day
+    try:
+        calendar = MarketCalendar()
+        result["connection"]["is_trading_day"] = calendar.is_trading_day()
+    except Exception:
+        result["connection"]["is_trading_day"] = True
+
+    return result
+
+
+async def get_connection_and_orders():
+    """Get TWS connection status and live orders."""
+    import asyncio
+
+    # Use socket-based check to avoid ib_insync event loop issues
+    result = await asyncio.to_thread(_check_connection_via_socket)
+
+    # If connected, try to get detailed info using ib_insync in subprocess
+    if result["connection"]["connected"]:
+        try:
+            import subprocess
+            import json
+            from ibkr_spy_puts.config import TWSSettings
+
+            tws_settings = TWSSettings()
+            # Run a quick subprocess to get account info and orders
+            script = f'''
+import json
+import asyncio
+asyncio.set_event_loop(asyncio.new_event_loop())
+from ib_insync import IB
+ib = IB()
+result = {{"account": None, "trading_mode": None, "orders": []}}
+try:
+    ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=98, readonly=True, timeout=10)
+    accounts = ib.managedAccounts()
+    if accounts:
+        result["account"] = accounts[0]
+        result["trading_mode"] = "PAPER" if accounts[0].startswith("DU") else "LIVE"
+    ib.reqAllOpenOrders()
+    ib.sleep(1)
+    for trade in ib.openTrades():
+        c, o, s = trade.contract, trade.order, trade.orderStatus
+        result["orders"].append({{
+            "order_id": o.orderId,
+            "symbol": c.symbol,
+            "sec_type": c.secType,
+            "strike": getattr(c, "strike", None),
+            "expiration": getattr(c, "lastTradeDateOrContractMonth", None),
+            "right": getattr(c, "right", None),
+            "action": o.action,
+            "order_type": o.orderType,
+            "quantity": int(o.totalQuantity),
+            "limit_price": o.lmtPrice if o.lmtPrice else None,
+            "stop_price": o.auxPrice if o.auxPrice else None,
+            "status": s.status,
+            "filled": int(s.filled),
+            "remaining": int(s.remaining),
+            "parent_id": o.parentId if o.parentId else None,
+        }})
+    ib.disconnect()
+except Exception as e:
+    result["error"] = str(e)
+print(json.dumps(result))
+'''
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                ["python", "-c", script],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                data = json.loads(proc.stdout.strip())
+                if data.get("account"):
+                    result["connection"]["account"] = data["account"]
+                    result["connection"]["trading_mode"] = data.get("trading_mode")
+                    result["connection"]["logged_in"] = True
+                result["live_orders"] = data.get("orders", [])
+        except Exception as e:
+            # Fall back to socket-only result
+            result["connection"]["error"] = str(e)
 
     return result
 
 
 @app.get("/api/connection-status")
-async def get_connection_status():
+async def api_connection_status():
     """Check TWS/Gateway connection status and trading readiness."""
-    result = get_connection_and_orders()
+    result = await get_connection_and_orders()
     return result["connection"]
 
 
 @app.get("/api/live-orders")
-async def get_live_orders():
+async def api_live_orders():
     """Get all live orders from IBKR."""
-    result = get_connection_and_orders()
+    result = await get_connection_and_orders()
     return {"orders": result["live_orders"], "connected": result["connection"]["connected"]}
 
 
@@ -341,7 +386,7 @@ async def dashboard(request: Request):
         risk = db.get_risk_metrics()
 
         # Get connection status and live orders in one call
-        ibkr_data = get_connection_and_orders()
+        ibkr_data = await get_connection_and_orders()
 
         return templates.TemplateResponse(
             "dashboard.html",

@@ -51,7 +51,8 @@ services:
       - "5900:5900"  # VNC (optional debugging)
     volumes:
       - ib-gateway-data:/home/ibgateway/Jts
-      - ./docker/ibc/config.ini:/opt/ibc/config.ini:ro
+      - ./docker/ibc/config.ini:/home/ibgateway/ibc/config.ini
+      - ./docker/ibc/jts.ini.tmpl:/home/ibgateway/Jts/jts.ini.tmpl
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:5000 || exit 0"]
       interval: 30s
@@ -69,9 +70,9 @@ services:
     build: .
     container_name: ibkr-bot
     environment:
-      # Connect to ib-gateway container
+      # Connect to ib-gateway container via socat proxy
       TWS_HOST: ib-gateway
-      TWS_PORT: 4001  # Live=4001, Paper=4002
+      TWS_PORT: 4003  # Socat proxy port (relays to 127.0.0.1:4001)
       TWS_CLIENT_ID: ${TWS_CLIENT_ID:-1}
       # Connect to postgres container
       DB_HOST: postgres
