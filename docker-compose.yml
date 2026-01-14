@@ -52,7 +52,6 @@ services:
     volumes:
       - ib-gateway-data:/home/ibgateway/Jts
       - ./docker/ibc/config.ini:/home/ibgateway/ibc/config.ini
-      - ./docker/ibc/jts.ini.tmpl:/home/ibgateway/Jts/jts.ini.tmpl
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:5000 || exit 0"]
       interval: 30s

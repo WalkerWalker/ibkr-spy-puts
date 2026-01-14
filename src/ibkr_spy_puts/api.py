@@ -200,16 +200,14 @@ def _check_connection_via_socket():
     }
 
     # Simple socket test to check if the port is open
+    # Note: This only means the port is listening, not that IBKR is logged in
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5)
         sock.connect((tws_settings.host, tws_settings.port))
         sock.close()
         result["connection"]["connected"] = True
-        result["connection"]["logged_in"] = True
-        result["connection"]["ready_to_trade"] = True
-        # We can't determine the account without ib_insync, so just mark as connected
-        result["connection"]["trading_mode"] = "LIVE"  # Assume live since we can't check
+        # Don't set logged_in or ready_to_trade here - wait for actual IBKR verification
     except Exception as e:
         result["connection"]["error"] = str(e)
 
@@ -306,6 +304,7 @@ print(json.dumps(result))
                     result["connection"]["account"] = data["account"]
                     result["connection"]["trading_mode"] = data.get("trading_mode")
                     result["connection"]["logged_in"] = True
+                    result["connection"]["ready_to_trade"] = True
                 result["live_orders"] = data.get("orders", [])
                 result["ibkr_positions"] = data.get("positions", [])
         except Exception as e:
