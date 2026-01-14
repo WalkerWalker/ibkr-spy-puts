@@ -271,6 +271,7 @@ try:
             "filled": int(s.filled),
             "remaining": int(s.remaining),
             "parent_id": o.parentId if o.parentId else None,
+            "oca_group": o.ocaGroup if o.ocaGroup else None,
         }})
     ib.disconnect()
 except Exception as e:
