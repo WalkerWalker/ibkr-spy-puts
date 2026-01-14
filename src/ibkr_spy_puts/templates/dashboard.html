@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SPY Put Strategy Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        h1 {
+            color: #00d4ff;
+            margin-bottom: 20px;
+            font-size: 24px;
+        }
+        h2 {
+            color: #888;
+            font-size: 14px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: #16213e;
+            border-radius: 10px;
+            padding: 20px;
+            border: 1px solid #0f3460;
+        }
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #0f3460;
+        }
+        .metric:last-child {
+            border-bottom: none;
+        }
+        .metric-label {
+            color: #888;
+            font-size: 14px;
+        }
+        .metric-value {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .metric-value.positive {
+            color: #00ff88;
+        }
+        .metric-value.negative {
+            color: #ff4444;
+        }
+        .metric-value.neutral {
+            color: #00d4ff;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            text-align: left;
+            padding: 12px 10px;
+            border-bottom: 1px solid #0f3460;
+        }
+        th {
+            color: #888;
+            font-weight: 500;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        td {
+            font-size: 14px;
+        }
+        .status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status.open {
+            background: #0f3460;
+            color: #00d4ff;
+        }
+        .status.filled {
+            background: #0f4030;
+            color: #00ff88;
+        }
+        .status.presubmitted {
+            background: #3f3000;
+            color: #ffaa00;
+        }
+        .timestamp {
+            color: #666;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        .orders-toggle {
+            cursor: pointer;
+            color: #00d4ff;
+            font-size: 12px;
+        }
+        .orders-row {
+            background: #0f1a30;
+        }
+        .orders-row td {
+            padding-left: 30px;
+        }
+    </style>
+</head>
+<body>
+    <h1>SPY Put Strategy Dashboard</h1>
+
+    <!-- Summary Cards -->
+    <div class="grid">
+        <div class="card">
+            <h2>Strategy Summary</h2>
+            <div class="metric">
+                <span class="metric-label">Open Positions</span>
+                <span class="metric-value neutral">{{ summary.open_positions or 0 }}</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Closed Trades</span>
+                <span class="metric-value">{{ summary.closed_trades or 0 }}</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Win Rate</span>
+                <span class="metric-value {% if (summary.win_rate_pct or 0) >= 50 %}positive{% else %}negative{% endif %}">
+                    {{ summary.win_rate_pct or 0 }}%
+                </span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Take Profits</span>
+                <span class="metric-value positive">{{ summary.take_profit_count or 0 }}</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Stop Losses</span>
+                <span class="metric-value negative">{{ summary.stop_loss_count or 0 }}</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>P&L</h2>
+            <div class="metric">
+                <span class="metric-label">Realized P&L</span>
+                <span class="metric-value {% if (summary.total_realized_pnl or 0) >= 0 %}positive{% else %}negative{% endif %}">
+                    ${{ "%.2f"|format(summary.total_realized_pnl or 0) }}
+                </span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Unrealized P&L</span>
+                <span class="metric-value {% if (risk.total_unrealized_pnl or 0) >= 0 %}positive{% else %}negative{% endif %}">
+                    ${{ "%.2f"|format(risk.total_unrealized_pnl or 0) }}
+                </span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Max Profit (if all TP)</span>
+                <span class="metric-value positive">${{ "%.2f"|format(risk.max_profit or 0) }}</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Max Loss (if all SL)</span>
+                <span class="metric-value negative">${{ "%.2f"|format(risk.max_loss or 0) }}</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Greeks (All Positions)</h2>
+            <div class="metric">
+                <span class="metric-label">Total Delta</span>
+                <span class="metric-value">{{ "%.2f"|format(risk.total_delta or 0) }}</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Total Theta</span>
+                <span class="metric-value positive">${{ "%.2f"|format(risk.total_theta or 0) }}/day</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Open Positions Table -->
+    <div class="card">
+        <h2>Open Positions</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Strike</th>
+                    <th>Expiration</th>
+                    <th>Entry Date</th>
+                    <th>DIT</th>
+                    <th>DTE</th>
+                    <th>Entry $</th>
+                    <th>TP Target</th>
+                    <th>SL Target</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pos in positions %}
+                <tr>
+                    <td>{{ pos.symbol }}</td>
+                    <td>${{ "%.2f"|format(pos.strike) }}</td>
+                    <td>{{ pos.expiration }}</td>
+                    <td>{{ pos.trade_date }}</td>
+                    <td>{{ pos.days_in_trade or 0 }}</td>
+                    <td>{{ pos.days_to_expiry }}</td>
+                    <td>${{ "%.2f"|format(pos.entry_price) }}</td>
+                    <td class="positive">${{ "%.2f"|format(pos.expected_tp_price) }}</td>
+                    <td class="negative">${{ "%.2f"|format(pos.expected_sl_price) }}</td>
+                    <td><span class="status open">{{ pos.status }}</span></td>
+                </tr>
+                {% endfor %}
+                {% if not positions %}
+                <tr>
+                    <td colspan="10" style="text-align: center; color: #666;">No open positions</td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+
+    <p class="timestamp">Last updated: {{ now().strftime('%Y-%m-%d %H:%M:%S') }} | <a href="/" style="color: #00d4ff;">Refresh</a></p>
+
+    <script>
+        // Auto-refresh every 60 seconds
+        setTimeout(() => location.reload(), 60000);
+    </script>
+</body>
+</html>

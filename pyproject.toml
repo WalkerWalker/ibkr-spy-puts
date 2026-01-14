@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "ibkr-spy-puts"
+version = "0.1.0"
+description = "IBKR SPY Put Selling Bot"
+authors = ["jiamin"]
+readme = "README.md"
+packages = [{include = "ibkr_spy_puts", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+ib_insync = "^0.9.86"
+psycopg2-binary = "^2.9.9"
+python-dotenv = "^1.0.0"
+pydantic = "^2.5.0"
+pydantic-settings = "^2.1.0"
+apscheduler = "^3.11.2"
+pandas-market-calendars = "^5.2.4"
+fastapi = "^0.128.0"
+uvicorn = {extras = ["standard"], version = "^0.40.0"}
+jinja2 = "^3.1.6"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-asyncio = "^0.23.0"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

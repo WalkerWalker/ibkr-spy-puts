@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv/
+ENV/
+.eggs/
+*.egg-info/
+*.egg
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov/
+.tox
+tests/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment files (secrets!)
+.env
+.env.*
+!.env.example
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Docker (don't include docker files in image)
+docker-compose*.yml
+Dockerfile*
+
+# Local development
+*.log
+*.sqlite
+*.db
+
+# macOS
+.DS_Store

@@ -1,0 +1,105 @@
+# Docker Compose for IBKR SPY Put Selling Bot
+#
+# Usage:
+#   docker-compose up -d              # Start all services
+#   docker-compose up -d postgres     # Start only database (local dev)
+#   docker-compose logs -f            # View all logs
+#   docker-compose down               # Stop all services
+#   docker-compose down -v            # Stop and delete all data
+
+services:
+  # ===========================================================================
+  # PostgreSQL Database
+  # ===========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: ibkr-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-ibkr}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ibkr_dev_password}
+      POSTGRES_DB: ${DB_NAME:-ibkr_puts}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-ibkr} -d ${DB_NAME:-ibkr_puts}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ibkr-network
+
+  # ===========================================================================
+  # IB Gateway + IBC (automated login)
+  # https://github.com/gnzsnz/ib-gateway-docker
+  # ===========================================================================
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: ibkr-gateway
+    environment:
+      TWS_USERID: ${TWS_USERID}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      TZ: ${TZ:-America/New_York}
+      READ_ONLY_API: "no"
+    ports:
+      - "4001:4001"  # Live API
+      - "4002:4002"  # Paper API
+      - "5900:5900"  # VNC (optional debugging)
+    volumes:
+      - ib-gateway-data:/home/ibgateway/Jts
+      - ./docker/ibc/config.ini:/opt/ibc/config.ini:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5000 || exit 0"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - ibkr-network
+
+  # ===========================================================================
+  # Trading Bot (Scheduler + Dashboard)
+  # ===========================================================================
+  trading-bot:
+    build: .
+    container_name: ibkr-bot
+    environment:
+      # Connect to ib-gateway container
+      TWS_HOST: ib-gateway
+      TWS_PORT: 4001  # Live=4001, Paper=4002
+      TWS_CLIENT_ID: ${TWS_CLIENT_ID:-1}
+      # Connect to postgres container
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-ibkr_puts}
+      DB_USER: ${DB_USER:-ibkr}
+      DB_PASSWORD: ${DB_PASSWORD:-ibkr_dev_password}
+      # Scheduler
+      SCHEDULE_TRADE_TIME: ${SCHEDULE_TRADE_TIME:-09:35}
+      SCHEDULE_TIMEZONE: ${SCHEDULE_TIMEZONE:-America/New_York}
+      # Runtime options
+      RUN_MODE: ${RUN_MODE:-all}
+      DRY_RUN: ${DRY_RUN:-true}
+      TZ: ${TZ:-America/New_York}
+    ports:
+      - "${DASHBOARD_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ib-gateway:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ibkr-network
+
+networks:
+  ibkr-network:
+
+volumes:
+  postgres_data:
+  ib-gateway-data:
