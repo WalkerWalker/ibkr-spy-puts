@@ -120,10 +120,120 @@
         .orders-row td {
             padding-left: 30px;
         }
+        .status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #16213e;
+            border-radius: 10px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            border: 1px solid #0f3460;
+        }
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        .status-dot.ready {
+            background: #00ff88;
+            box-shadow: 0 0 10px #00ff88;
+        }
+        .status-dot.not-ready {
+            background: #ff4444;
+            box-shadow: 0 0 10px #ff4444;
+            animation: none;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .status-text {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .status-text.ready {
+            color: #00ff88;
+        }
+        .status-text.not-ready {
+            color: #ff4444;
+        }
+        .status-details {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            color: #888;
+        }
+        .status-detail {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .status-detail .label {
+            color: #666;
+        }
+        .status-detail .value {
+            color: #ccc;
+        }
+        .status-detail .value.paper {
+            color: #ffaa00;
+        }
+        .status-detail .value.live {
+            color: #00ff88;
+        }
     </style>
 </head>
 <body>
     <h1>SPY Put Strategy Dashboard</h1>
+
+    <!-- Connection Status Bar -->
+    <div class="status-bar">
+        <div class="status-indicator">
+            <div class="status-dot {% if connection.ready_to_trade %}ready{% else %}not-ready{% endif %}"></div>
+            <span class="status-text {% if connection.ready_to_trade %}ready{% else %}not-ready{% endif %}">
+                {% if connection.ready_to_trade %}
+                    Ready to Trade
+                {% else %}
+                    Not Connected
+                {% endif %}
+            </span>
+        </div>
+        <div class="status-details">
+            {% if connection.ready_to_trade %}
+                <div class="status-detail">
+                    <span class="label">Mode:</span>
+                    <span class="value {% if connection.trading_mode == 'PAPER' %}paper{% else %}live{% endif %}">
+                        {{ connection.trading_mode }}
+                    </span>
+                </div>
+                <div class="status-detail">
+                    <span class="label">Account:</span>
+                    <span class="value">{{ connection.account }}</span>
+                </div>
+            {% else %}
+                <div class="status-detail">
+                    <span class="label">Port:</span>
+                    <span class="value">{{ connection.tws_port }}</span>
+                </div>
+                {% if connection.error %}
+                <div class="status-detail">
+                    <span class="label">Error:</span>
+                    <span class="value" style="color: #ff6666;">Connection refused</span>
+                </div>
+                {% endif %}
+            {% endif %}
+            <div class="status-detail">
+                <span class="label">Next Trade:</span>
+                <span class="value">{{ connection.next_trade_time }} ET</span>
+            </div>
+        </div>
+    </div>
 
     <!-- Summary Cards -->
     <div class="grid">
