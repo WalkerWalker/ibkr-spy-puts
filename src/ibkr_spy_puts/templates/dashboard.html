@@ -418,13 +418,17 @@
                     </tr>
                 </thead>
                 <tbody>
-                    {% for pos in positions %}
-                    {% set is_verified = false %}
+                    {# Build set of IBKR position keys for quick lookup #}
+                    {% set ibkr_keys = [] %}
                     {% for ibkr_pos in ibkr_positions %}
-                        {% if ibkr_pos.symbol == pos.symbol and ibkr_pos.strike == pos.strike and ibkr_pos.expiration == pos.expiration|replace('-', '') %}
-                            {% set is_verified = true %}
-                        {% endif %}
+                        {% set key = ibkr_pos.symbol ~ '_' ~ (ibkr_pos.strike|int) ~ '_' ~ ibkr_pos.expiration %}
+                        {% set _ = ibkr_keys.append(key) %}
                     {% endfor %}
+
+                    {% for pos in positions %}
+                    {# Create key for this position (remove dashes from expiration to match IBKR format) #}
+                    {% set pos_key = pos.symbol ~ '_' ~ (pos.strike|int) ~ '_' ~ pos.expiration|replace('-', '') %}
+                    {% set is_verified = pos_key in ibkr_keys %}
                     <tr>
                         <td>{{ pos.symbol }}</td>
                         <td>${{ "%.2f"|format(pos.strike) }}</td>
@@ -438,10 +442,8 @@
                         <td>
                             {% if is_verified %}
                                 <span class="status verified">Live</span>
-                            {% elif connection.ready_to_trade %}
-                                <span class="status unverified">DB Only</span>
                             {% else %}
-                                <span class="status open">Open</span>
+                                <span class="status unverified">DB Only</span>
                             {% endif %}
                         </td>
                     </tr>
