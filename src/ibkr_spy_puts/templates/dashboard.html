@@ -39,6 +39,7 @@
             border-radius: 10px;
             padding: 20px;
             border: 1px solid #0f3460;
+            margin-bottom: 20px;
         }
         .metric {
             display: flex;
@@ -100,26 +101,25 @@
             background: #0f4030;
             color: #00ff88;
         }
-        .status.presubmitted {
+        .status.presubmitted, .status.submitted {
             background: #3f3000;
             color: #ffaa00;
+        }
+        .status.buy {
+            background: #0f4030;
+            color: #00ff88;
+        }
+        .status.sell {
+            background: #400f0f;
+            color: #ff6666;
         }
         .timestamp {
             color: #666;
             font-size: 12px;
             margin-top: 20px;
         }
-        .orders-toggle {
-            cursor: pointer;
-            color: #00d4ff;
-            font-size: 12px;
-        }
-        .orders-row {
-            background: #0f1a30;
-        }
-        .orders-row td {
-            padding-left: 30px;
-        }
+
+        /* Status bar styles */
         .status-bar {
             display: flex;
             align-items: center;
@@ -186,6 +186,41 @@
         }
         .status-detail .value.live {
             color: #00ff88;
+        }
+
+        /* Collapsible section styles */
+        .collapsible-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }
+        .collapsible-header h2 {
+            margin-bottom: 0;
+        }
+        .collapse-icon {
+            font-size: 18px;
+            color: #888;
+            transition: transform 0.2s;
+        }
+        .collapsible-header.collapsed .collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .collapsible-content {
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        .collapsible-content.collapsed {
+            max-height: 0 !important;
+        }
+        .section-count {
+            background: #0f3460;
+            color: #00d4ff;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            margin-left: 10px;
         }
     </style>
 </head>
@@ -300,51 +335,126 @@
         </div>
     </div>
 
-    <!-- Open Positions Table -->
+    <!-- Live Orders from IBKR (Collapsible) -->
     <div class="card">
-        <h2>Open Positions</h2>
-        <table>
-            <thead>
-                <tr>
-                    <th>Symbol</th>
-                    <th>Strike</th>
-                    <th>Expiration</th>
-                    <th>Entry Date</th>
-                    <th>DIT</th>
-                    <th>DTE</th>
-                    <th>Entry $</th>
-                    <th>TP Target</th>
-                    <th>SL Target</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for pos in positions %}
-                <tr>
-                    <td>{{ pos.symbol }}</td>
-                    <td>${{ "%.2f"|format(pos.strike) }}</td>
-                    <td>{{ pos.expiration }}</td>
-                    <td>{{ pos.trade_date }}</td>
-                    <td>{{ pos.days_in_trade or 0 }}</td>
-                    <td>{{ pos.days_to_expiry }}</td>
-                    <td>${{ "%.2f"|format(pos.entry_price) }}</td>
-                    <td class="positive">${{ "%.2f"|format(pos.expected_tp_price) }}</td>
-                    <td class="negative">${{ "%.2f"|format(pos.expected_sl_price) }}</td>
-                    <td><span class="status open">{{ pos.status }}</span></td>
-                </tr>
-                {% endfor %}
-                {% if not positions %}
-                <tr>
-                    <td colspan="10" style="text-align: center; color: #666;">No open positions</td>
-                </tr>
-                {% endif %}
-            </tbody>
-        </table>
+        <div class="collapsible-header" onclick="toggleSection('live-orders')">
+            <h2>
+                Live Orders (IBKR)
+                <span class="section-count">{{ live_orders|length }}</span>
+            </h2>
+            <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div id="live-orders" class="collapsible-content">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Order ID</th>
+                        <th>Symbol</th>
+                        <th>Strike</th>
+                        <th>Exp</th>
+                        <th>Action</th>
+                        <th>Type</th>
+                        <th>Qty</th>
+                        <th>Limit</th>
+                        <th>Stop</th>
+                        <th>Status</th>
+                        <th>Filled</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for order in live_orders %}
+                    <tr>
+                        <td>{{ order.order_id }}</td>
+                        <td>{{ order.symbol }}{% if order.right %} {{ order.right }}{% endif %}</td>
+                        <td>{% if order.strike %}${{ "%.0f"|format(order.strike) }}{% else %}-{% endif %}</td>
+                        <td>{% if order.expiration %}{{ order.expiration }}{% else %}-{% endif %}</td>
+                        <td><span class="status {{ order.action|lower }}">{{ order.action }}</span></td>
+                        <td>{{ order.order_type }}</td>
+                        <td>{{ order.quantity }}</td>
+                        <td>{% if order.limit_price %}${{ "%.2f"|format(order.limit_price) }}{% else %}-{% endif %}</td>
+                        <td>{% if order.stop_price %}${{ "%.2f"|format(order.stop_price) }}{% else %}-{% endif %}</td>
+                        <td><span class="status {{ order.status|lower }}">{{ order.status }}</span></td>
+                        <td>{{ order.filled }}/{{ order.quantity }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% if not live_orders %}
+                    <tr>
+                        <td colspan="11" style="text-align: center; color: #666;">
+                            {% if connection.ready_to_trade %}
+                                No open orders in IBKR
+                            {% else %}
+                                Connect to IBKR to see live orders
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Open Positions Table (Collapsible) -->
+    <div class="card">
+        <div class="collapsible-header" onclick="toggleSection('positions')">
+            <h2>
+                Open Positions (Database)
+                <span class="section-count">{{ positions|length }}</span>
+            </h2>
+            <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div id="positions" class="collapsible-content">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Strike</th>
+                        <th>Expiration</th>
+                        <th>Entry Date</th>
+                        <th>DIT</th>
+                        <th>DTE</th>
+                        <th>Entry $</th>
+                        <th>TP Target</th>
+                        <th>SL Target</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pos in positions %}
+                    <tr>
+                        <td>{{ pos.symbol }}</td>
+                        <td>${{ "%.2f"|format(pos.strike) }}</td>
+                        <td>{{ pos.expiration }}</td>
+                        <td>{{ pos.trade_date }}</td>
+                        <td>{{ pos.days_in_trade or 0 }}</td>
+                        <td>{{ pos.days_to_expiry }}</td>
+                        <td>${{ "%.2f"|format(pos.entry_price) }}</td>
+                        <td class="positive">${{ "%.2f"|format(pos.expected_tp_price) }}</td>
+                        <td class="negative">${{ "%.2f"|format(pos.expected_sl_price) }}</td>
+                        <td><span class="status open">{{ pos.status }}</span></td>
+                    </tr>
+                    {% endfor %}
+                    {% if not positions %}
+                    <tr>
+                        <td colspan="10" style="text-align: center; color: #666;">No open positions</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <p class="timestamp">Last updated: {{ now().strftime('%Y-%m-%d %H:%M:%S') }} | <a href="/" style="color: #00d4ff;">Refresh</a></p>
 
     <script>
+        // Toggle collapsible sections
+        function toggleSection(id) {
+            const content = document.getElementById(id);
+            const header = content.previousElementSibling;
+
+            content.classList.toggle('collapsed');
+            header.classList.toggle('collapsed');
+        }
+
         // Auto-refresh every 60 seconds
         setTimeout(() => location.reload(), 60000);
     </script>

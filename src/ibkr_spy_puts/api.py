@@ -164,6 +164,110 @@ async def get_pending_orders():
 
 
 # =============================================================================
+# Connection Status & Live Orders
+# =============================================================================
+
+
+def get_connection_and_orders():
+    """Get TWS connection status and live orders in one connection."""
+    from ibkr_spy_puts.config import TWSSettings, ScheduleSettings
+    from ibkr_spy_puts.scheduler import MarketCalendar
+    from ib_insync import IB
+    import os
+
+    tws_settings = TWSSettings()
+    schedule_settings = ScheduleSettings(
+        trade_time=os.getenv("SCHEDULE_TRADE_TIME", "09:30"),
+        timezone=os.getenv("SCHEDULE_TIMEZONE", "America/New_York"),
+    )
+
+    result = {
+        "connection": {
+            "connected": False,
+            "logged_in": False,
+            "account": None,
+            "trading_mode": None,
+            "ready_to_trade": False,
+            "tws_host": tws_settings.host,
+            "tws_port": tws_settings.port,
+            "next_trade_time": schedule_settings.trade_time,
+            "timezone": schedule_settings.timezone,
+            "error": None,
+        },
+        "live_orders": [],
+    }
+
+    ib = IB()
+    try:
+        ib.connect(tws_settings.host, tws_settings.port, clientId=99, readonly=True)
+        result["connection"]["connected"] = True
+
+        # Get account info
+        accounts = ib.managedAccounts()
+        if accounts:
+            result["connection"]["logged_in"] = True
+            result["connection"]["account"] = accounts[0]
+            if accounts[0].startswith("DU"):
+                result["connection"]["trading_mode"] = "PAPER"
+            else:
+                result["connection"]["trading_mode"] = "LIVE"
+
+        # Check if today is a trading day
+        calendar = MarketCalendar()
+        result["connection"]["is_trading_day"] = calendar.is_trading_day()
+        result["connection"]["ready_to_trade"] = result["connection"]["connected"] and result["connection"]["logged_in"]
+
+        # Get all open orders
+        ib.reqAllOpenOrders()
+        ib.sleep(2)
+
+        for trade in ib.openTrades():
+            contract = trade.contract
+            order = trade.order
+            status = trade.orderStatus
+
+            order_info = {
+                "order_id": order.orderId,
+                "symbol": contract.symbol,
+                "sec_type": contract.secType,
+                "strike": getattr(contract, 'strike', None),
+                "expiration": getattr(contract, 'lastTradeDateOrContractMonth', None),
+                "right": getattr(contract, 'right', None),
+                "action": order.action,
+                "order_type": order.orderType,
+                "quantity": int(order.totalQuantity),
+                "limit_price": order.lmtPrice if order.lmtPrice else None,
+                "stop_price": order.auxPrice if order.auxPrice else None,
+                "status": status.status,
+                "filled": int(status.filled),
+                "remaining": int(status.remaining),
+                "parent_id": order.parentId if order.parentId else None,
+            }
+            result["live_orders"].append(order_info)
+
+        ib.disconnect()
+
+    except Exception as e:
+        result["connection"]["error"] = str(e)
+
+    return result
+
+
+@app.get("/api/connection-status")
+async def get_connection_status():
+    """Check TWS/Gateway connection status and trading readiness."""
+    result = get_connection_and_orders()
+    return result["connection"]
+
+
+@app.get("/api/live-orders")
+async def get_live_orders():
+    """Get all live orders from IBKR."""
+    result = get_connection_and_orders()
+    return {"orders": result["live_orders"], "connected": result["connection"]["connected"]}
+
+
+# =============================================================================
 # Greeks Refresh
 # =============================================================================
 
@@ -236,8 +340,8 @@ async def dashboard(request: Request):
         summary = db.get_strategy_summary()
         risk = db.get_risk_metrics()
 
-        # Get connection status
-        connection_status = await get_connection_status()
+        # Get connection status and live orders in one call
+        ibkr_data = get_connection_and_orders()
 
         return templates.TemplateResponse(
             "dashboard.html",
@@ -246,7 +350,8 @@ async def dashboard(request: Request):
                 "positions": positions,
                 "summary": summary,
                 "risk": risk,
-                "connection": connection_status,
+                "connection": ibkr_data["connection"],
+                "live_orders": ibkr_data["live_orders"],
                 "now": datetime.now,
             },
         )
@@ -266,62 +371,3 @@ async def health():
         return {"status": "unhealthy", "error": str(e)}
     finally:
         db.disconnect()
-
-
-@app.get("/api/connection-status")
-async def get_connection_status():
-    """Check TWS/Gateway connection status and trading readiness."""
-    from ibkr_spy_puts.config import TWSSettings, ScheduleSettings
-    from ibkr_spy_puts.scheduler import MarketCalendar
-    from ib_insync import IB
-    import os
-
-    tws_settings = TWSSettings()
-    schedule_settings = ScheduleSettings(
-        trade_time=os.getenv("SCHEDULE_TRADE_TIME", "09:30"),
-        timezone=os.getenv("SCHEDULE_TIMEZONE", "America/New_York"),
-    )
-
-    status = {
-        "connected": False,
-        "logged_in": False,
-        "account": None,
-        "trading_mode": None,  # "PAPER" or "LIVE"
-        "ready_to_trade": False,
-        "tws_host": tws_settings.host,
-        "tws_port": tws_settings.port,
-        "next_trade_time": schedule_settings.trade_time,
-        "timezone": schedule_settings.timezone,
-        "error": None,
-    }
-
-    ib = IB()
-    try:
-        ib.connect(tws_settings.host, tws_settings.port, clientId=99, readonly=True)
-        status["connected"] = True
-
-        # Get account info to verify login
-        accounts = ib.managedAccounts()
-        if accounts:
-            status["logged_in"] = True
-            status["account"] = accounts[0]
-            # DU prefix = paper trading account
-            if accounts[0].startswith("DU"):
-                status["trading_mode"] = "PAPER"
-            else:
-                status["trading_mode"] = "LIVE"
-
-        # Check if today is a trading day
-        calendar = MarketCalendar()
-        is_trading_day = calendar.is_trading_day()
-
-        # Ready to trade = connected + logged in
-        status["ready_to_trade"] = status["connected"] and status["logged_in"]
-        status["is_trading_day"] = is_trading_day
-
-        ib.disconnect()
-
-    except Exception as e:
-        status["error"] = str(e)
-
-    return status
