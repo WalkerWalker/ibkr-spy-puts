@@ -54,6 +54,8 @@ credentials.json
 .aws-root-credentials
 .aws-deployer-credentials
 .env.production
+.ibkr-key.pem
+.aws-infrastructure
 
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/

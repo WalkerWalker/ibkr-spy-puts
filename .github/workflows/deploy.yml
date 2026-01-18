@@ -1,0 +1,34 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/ibkr-spy-puts
+
+            # Pull latest code
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Stop existing containers
+            docker-compose down || true
+
+            # Build and start with latest code
+            docker-compose build --no-cache
+            docker-compose up -d
+
+            # Show status
+            docker-compose ps
+            echo "Deployment complete!"
