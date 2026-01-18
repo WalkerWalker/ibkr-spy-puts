@@ -48,3 +48,69 @@ poetry run pytest tests/test_environment.py::TestPythonEnvironment::test_python_
 - `ib_insync`: TWS API wrapper (not async despite name - uses event loop internally)
 - `pydantic-settings`: Configuration from environment variables
 - `pytest-asyncio`: Configured with `asyncio_mode = "auto"` in pyproject.toml
+
+## Post-Execution Verification
+
+After any trade execution or order placement, ALWAYS verify via dashboard APIs:
+
+```bash
+# 1. Connection status - must be connected, logged in, ready
+curl -s http://localhost:8000/api/connection-status | python3 -m json.tool
+
+# 2. Orders in IBKR - should match expected count (2 per position: TP + SL)
+curl -s http://localhost:8000/api/live-orders | python3 -m json.tool
+
+# 3. Positions in database - should match IBKR positions
+curl -s http://localhost:8000/api/positions | python3 -m json.tool
+
+# 4. Trade history - chronological log of all executions
+curl -s http://localhost:8000/api/trade-history | python3 -m json.tool
+```
+
+**Checklist:**
+- [ ] Connection: `connected=true`, `logged_in=true`, `ready_to_trade=true`
+- [ ] Orders: Count = (number of positions) × 2
+- [ ] Positions: Each has `expected_tp_price` and `expected_sl_price`
+- [ ] Trade history: All entries have correct action, price, and timestamp
+
+## Trading Logic
+
+### Two-Step Order Process
+1. **Step 1: Place sell order**
+   - Check for conflicting BUY orders on the same contract
+   - If conflicts exist: cancel them temporarily
+   - Place parent SELL order
+   - Wait for FILL
+   - Re-place cancelled orders with their ORIGINAL OCA groups
+
+2. **Step 2: Place TP/SL orders**
+   - Only after parent is FILLED
+   - Create new OCA group for this trade's TP/SL
+   - Place limit order for take profit
+   - Place stop order for stop loss
+
+### Key Rules
+- IBKR does not allow BUY and SELL orders simultaneously on the same US options contract
+- Each trade's TP/SL must be in its own OCA group (never combine)
+- The trades table is a pure trade log (entries and exits)
+- TP/SL prices are derived from the orders table, not stored in trades
+
+## Testing with Paper Trading
+
+To test the conflict handling logic before live trading:
+
+```bash
+# 1. Switch to paper trading mode
+# Set TRADING_MODE=paper in .env and restart ib-gateway
+
+# 2. Manually create a position with TP/SL orders
+docker exec ibkr-bot python3 /app/tests/scripts/create_test_position.py
+
+# 3. Trigger the scheduler to place a new conflicting order
+SCHEDULE_TRADE_TIME=HH:MM docker-compose up -d trading-bot
+
+# 4. Verify the conflict was handled correctly
+curl -s http://localhost:8000/api/live-orders | python3 -m json.tool
+```
+
+See `tests/integration/test_conflict_handling.py` for automated tests.

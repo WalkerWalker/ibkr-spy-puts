@@ -10,7 +10,11 @@ class TWSSettings(BaseSettings):
 
     host: str = "127.0.0.1"
     port: int = 7496  # Live: 7496, Paper: 7497
-    client_id: int = 1
+    # ClientId 0 is the master clientId with special privileges:
+    # - Can see ALL orders from ANY clientId
+    # - Can cancel ANY order regardless of which clientId placed it
+    # Using 0 for production prevents issues where scripts can't manage orders
+    client_id: int = 0
 
 
 class DatabaseSettings(BaseSettings):
@@ -38,11 +42,16 @@ class StrategySettings(BaseSettings):
     symbol: str = "SPY"
     quantity: int = 1
     order_type: str = "LMT"  # LMT or MKT
-    limit_offset: float = 0.05
 
     # Option selection criteria
     target_dte: int = 90  # Target days to expiration (closest to this)
     target_delta: float = -0.15  # Target delta (closest to this, negative for puts)
+
+    # Adaptive algo priority: controls fill speed vs price improvement
+    # True = Urgent priority (faster fills, for paper trading)
+    # False = Normal priority (seeks price improvement, for live trading)
+    # Note: Limit price is always mid price; only algo priority changes
+    use_aggressive_fill: bool = False
 
     # Legacy settings (kept for backwards compatibility)
     days_to_expiration: int = 90  # Alias for target_dte

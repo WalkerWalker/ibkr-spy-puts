@@ -77,6 +77,8 @@ class TradeResult:
     stop_loss_order_id: int | None
     message: str
     timestamp: datetime
+    fill_price: float | None = None
+    cancelled_orders: list | None = None  # Orders cancelled for conflict, to be restored
 
 
 class IBKRClientProtocol(Protocol):
@@ -107,7 +109,10 @@ class IBKRClientProtocol(Protocol):
         limit_price: float,
         take_profit_price: float,
         stop_loss_price: float,
+        use_aggressive_fill: bool = False,
     ) -> BracketOrderResult: ...
+
+    def restore_cancelled_orders(self, cancelled_orders: list) -> bool: ...
 
 
 class PutSellingStrategy:
@@ -145,20 +150,25 @@ class PutSellingStrategy:
     def calculate_limit_price(self, option: OptionContract) -> float:
         """Calculate limit price for the sell order.
 
+        Always uses mid price. Fill speed is controlled by Adaptive algo priority:
+        - Normal priority (live): seeks price improvement
+        - Urgent priority (paper): prioritizes fast fill
+
         Args:
             option: The option contract to sell.
 
         Returns:
-            Limit price (mid price minus offset for better fill).
+            Mid price, rounded to 2 decimal places.
         """
         if option.mid is not None:
-            # Use mid price minus a small offset
-            return round(option.mid - self.strategy.limit_offset, 2)
+            return round(option.mid, 2)
+        elif option.bid is not None and option.ask is not None:
+            return round((option.bid + option.ask) / 2, 2)
         elif option.bid is not None:
-            # Fall back to bid if no mid
+            # Fallback to bid if no ask available
             return option.bid
-        else:
-            raise ValueError("Option has no price data")
+
+        raise ValueError("Option has no price data")
 
     def calculate_bracket_prices(self, sell_price: float) -> BracketPrices:
         """Calculate bracket order prices.
@@ -264,9 +274,14 @@ class PutSellingStrategy:
                     limit_price=order.limit_price or order.bracket_prices.sell_price,
                     take_profit_price=order.bracket_prices.take_profit_price,
                     stop_loss_price=order.bracket_prices.stop_loss_price,
+                    use_aggressive_fill=self.strategy.use_aggressive_fill,
                 )
 
                 if result.success:
+                    # Extract fill price from parent trade if available
+                    fill_price = result.fill_price
+                    if not fill_price and result.parent_trade and result.parent_trade.orderStatus.avgFillPrice:
+                        fill_price = result.parent_trade.orderStatus.avgFillPrice
                     return TradeResult(
                         success=True,
                         order_id=result.parent_order_id,
@@ -275,16 +290,19 @@ class PutSellingStrategy:
                         stop_loss_order_id=result.stop_loss_order_id,
                         message="Bracket order placed successfully",
                         timestamp=datetime.now(),
+                        fill_price=fill_price,
+                        cancelled_orders=result.cancelled_orders,
                     )
                 else:
                     return TradeResult(
                         success=False,
                         order_id=None,
-                        parent_order_id=None,
+                        parent_order_id=result.parent_order_id,
                         take_profit_order_id=None,
                         stop_loss_order_id=None,
                         message=f"Bracket order failed: {result.error_message}",
                         timestamp=datetime.now(),
+                        cancelled_orders=result.cancelled_orders,
                     )
             else:
                 # Place single order (no bracket)
@@ -310,15 +328,27 @@ class PutSellingStrategy:
                 timestamp=datetime.now(),
             )
 
-    def run(self, dry_run: bool = False) -> tuple[TradeOrder | None, TradeResult]:
-        """Run the complete strategy: select option and place order.
+    def run(
+        self,
+        dry_run: bool = False,
+        max_retries: int = 10,
+    ) -> tuple[TradeOrder | None, TradeResult]:
+        """Run the complete strategy with retry logic.
+
+        If the order doesn't fill within the timeout, the order is cancelled
+        and a new contract is selected for retry. After all retries, any
+        cancelled orders are restored.
 
         Args:
             dry_run: If True, don't actually place the order.
+            max_retries: Maximum number of retry attempts (default 10).
 
         Returns:
             Tuple of (TradeOrder, TradeResult). TradeOrder may be None if no option found.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Ensure connected
         if not self.client.is_connected:
             return None, TradeResult(
@@ -331,22 +361,77 @@ class PutSellingStrategy:
                 timestamp=datetime.now(),
             )
 
-        # Create trade order
-        order = self.create_trade_order()
-        if order is None:
-            return None, TradeResult(
-                success=False,
-                order_id=None,
-                parent_order_id=None,
-                take_profit_order_id=None,
-                stop_loss_order_id=None,
-                message="No suitable option found",
-                timestamp=datetime.now(),
-            )
+        # Track cancelled orders across retries
+        all_cancelled_orders: list = []
+        last_order = None
+        last_result = None
 
-        # Execute the trade
-        result = self.execute_trade(order, dry_run=dry_run)
-        return order, result
+        for attempt in range(1, max_retries + 1):
+            logger.info(f"Trade attempt {attempt}/{max_retries}")
+
+            # Create trade order (selects option based on delta, calculates mid price)
+            order = self.create_trade_order()
+            if order is None:
+                logger.warning(f"Attempt {attempt}: No suitable option found")
+                # If we can't find an option, restore cancelled orders and return
+                if all_cancelled_orders:
+                    logger.info("Restoring cancelled orders before returning...")
+                    self.client.restore_cancelled_orders(all_cancelled_orders)
+                return None, TradeResult(
+                    success=False,
+                    order_id=None,
+                    parent_order_id=None,
+                    take_profit_order_id=None,
+                    stop_loss_order_id=None,
+                    message="No suitable option found",
+                    timestamp=datetime.now(),
+                )
+
+            last_order = order
+            logger.info(f"Attempt {attempt}: Selected {order.option.symbol} {order.option.strike}P @ ${order.limit_price:.2f}")
+
+            # Execute the trade
+            result = self.execute_trade(order, dry_run=dry_run)
+            last_result = result
+
+            if result.success:
+                # Success! Restore any cancelled orders from previous positions
+                if all_cancelled_orders:
+                    logger.info("Trade filled! Restoring cancelled orders from existing positions...")
+                    self.client.restore_cancelled_orders(all_cancelled_orders)
+                return order, result
+
+            # Failed - check if we have cancelled orders to track
+            if result.cancelled_orders:
+                # Merge with existing cancelled orders (avoid duplicates by order ID)
+                existing_ids = {o.get("order", {}).orderId for o in all_cancelled_orders if o.get("order")}
+                for co in result.cancelled_orders:
+                    order_obj = co.get("order")
+                    if order_obj and order_obj.orderId not in existing_ids:
+                        all_cancelled_orders.append(co)
+                        existing_ids.add(order_obj.orderId)
+
+            logger.warning(f"Attempt {attempt} failed: {result.message}")
+
+            if attempt < max_retries:
+                logger.info(f"Retrying with new contract selection...")
+            else:
+                logger.error(f"All {max_retries} attempts failed")
+
+        # All retries exhausted - restore cancelled orders
+        if all_cancelled_orders:
+            logger.info("All retries failed. Restoring cancelled orders...")
+            self.client.restore_cancelled_orders(all_cancelled_orders)
+
+        return last_order, TradeResult(
+            success=False,
+            order_id=None,
+            parent_order_id=last_result.parent_order_id if last_result else None,
+            take_profit_order_id=None,
+            stop_loss_order_id=None,
+            message=f"Failed after {max_retries} attempts: {last_result.message if last_result else 'Unknown error'}",
+            timestamp=datetime.now(),
+        )
 
     def describe_trade(self, order: TradeOrder) -> str:
         """Generate a human-readable description of a trade order.

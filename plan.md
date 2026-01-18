@@ -253,7 +253,7 @@ Create a `.env` file or config system for:
 # TWS Connection
 TWS_HOST=127.0.0.1
 TWS_PORT=7496          # Live: 7496, Paper: 7497
-TWS_CLIENT_ID=1
+TWS_CLIENT_ID=0        # 0 = master clientId (can manage orders from any clientId)
 
 # Database
 DB_HOST=localhost
@@ -266,7 +266,6 @@ DB_PASSWORD=xxx
 STRATEGY_SYMBOL=SPY
 STRATEGY_QUANTITY=1              # Number of contracts
 STRATEGY_ORDER_TYPE=LMT          # LMT or MKT
-STRATEGY_LIMIT_OFFSET=0.05       # For limit orders
 STRATEGY_TARGET_DTE=90           # Target days to expiration (closest to this)
 STRATEGY_TARGET_DELTA=-0.15      # Target delta (closest to this, negative for puts)
 

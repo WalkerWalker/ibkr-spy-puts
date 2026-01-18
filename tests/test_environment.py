@@ -65,7 +65,8 @@ class TestPythonEnvironment:
         # TWS defaults
         assert settings.tws.host == "127.0.0.1"
         assert settings.tws.port == 7496
-        assert settings.tws.client_id == 1
+        # ClientId 0 is the master clientId - can manage orders from any clientId
+        assert settings.tws.client_id == 0
 
         # Strategy defaults
         assert settings.strategy.symbol == "SPY"

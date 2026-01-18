@@ -14,7 +14,7 @@ from ibkr_spy_puts.config import DatabaseSettings
 
 @dataclass
 class Trade:
-    """Represents a strategy trade."""
+    """Represents a trade/position record."""
 
     id: int | None = None
     trade_date: date | None = None
@@ -24,13 +24,8 @@ class Trade:
     quantity: int = 1
     entry_price: Decimal | None = None
     entry_time: datetime | None = None
-    exit_price: Decimal | None = None
-    exit_time: datetime | None = None
-    exit_reason: str | None = None
-    expected_tp_price: Decimal | None = None
-    expected_sl_price: Decimal | None = None
-    realized_pnl: Decimal | None = None
-    slippage: Decimal | None = None
+    expected_tp_price: Decimal | None = None  # Take profit price
+    expected_sl_price: Decimal | None = None  # Stop loss price
     status: str = "OPEN"
     strategy_id: str = "spy-put-selling"
 
@@ -154,13 +149,11 @@ class Database:
                 """
                 INSERT INTO trades (
                     trade_date, symbol, strike, expiration, quantity,
-                    entry_price, entry_time,
-                    expected_tp_price, expected_sl_price,
+                    entry_price, entry_time, expected_tp_price, expected_sl_price,
                     status, strategy_id
                 ) VALUES (
                     %(trade_date)s, %(symbol)s, %(strike)s, %(expiration)s, %(quantity)s,
-                    %(entry_price)s, %(entry_time)s,
-                    %(expected_tp_price)s, %(expected_sl_price)s,
+                    %(entry_price)s, %(entry_time)s, %(expected_tp_price)s, %(expected_sl_price)s,
                     %(status)s, %(strategy_id)s
                 )
                 RETURNING id
@@ -182,6 +175,18 @@ class Database:
             result = cur.fetchone()
             return result["id"]
 
+    def close_trade(self, trade_id: int) -> None:
+        """Mark a trade as closed.
+
+        Args:
+            trade_id: ID of trade to close.
+        """
+        with self.cursor() as cur:
+            cur.execute(
+                "UPDATE trades SET status = 'CLOSED' WHERE id = %s",
+                (trade_id,),
+            )
+
     def update_trade_exit(
         self,
         trade_id: int,
@@ -189,15 +194,15 @@ class Database:
         exit_time: datetime,
         exit_reason: str,
     ) -> None:
-        """Update trade with exit information.
+        """Update trade with exit details and mark as closed.
 
-        P&L and slippage are calculated automatically by database trigger.
+        This triggers the calculate_realized_pnl function in the database.
 
         Args:
             trade_id: ID of trade to update.
-            exit_price: Fill price when closed.
-            exit_time: When the exit order filled.
-            exit_reason: TAKE_PROFIT, STOP_LOSS, MANUAL, EXPIRED_WORTHLESS, ASSIGNED
+            exit_price: Price at which position was closed.
+            exit_time: Time of exit.
+            exit_reason: Reason for exit (TAKE_PROFIT, STOP_LOSS, MANUAL, etc).
         """
         with self.cursor() as cur:
             cur.execute(
@@ -475,6 +480,69 @@ class Database:
             cur.execute("SELECT * FROM open_positions ORDER BY expiration")
             return list(cur.fetchall())
 
+    def get_positions_with_orders(self) -> list[dict[str, Any]]:
+        """Get all open positions with their related orders.
+
+        Returns:
+            List of positions, each with an 'orders' list containing TP/SL orders.
+        """
+        with self.cursor() as cur:
+            # Get positions
+            cur.execute("SELECT * FROM open_positions ORDER BY expiration, strike")
+            positions = [dict(row) for row in cur.fetchall()]
+
+            # Get active orders for each position (exclude cancelled/filled)
+            for pos in positions:
+                cur.execute("""
+                    SELECT order_type, action, order_class, limit_price, stop_price,
+                           ibkr_order_id, status
+                    FROM orders
+                    WHERE trade_id = %s
+                      AND order_type IN ('TAKE_PROFIT', 'STOP_LOSS')
+                      AND status IN ('SUBMITTED', 'PRESUBMITTED', 'PENDING')
+                    ORDER BY order_type
+                """, (pos['id'],))
+                pos['orders'] = [dict(row) for row in cur.fetchall()]
+
+            return positions
+
+    def get_trade_history(self) -> list[dict[str, Any]]:
+        """Get trade execution history.
+
+        Returns a simple log of all executed trades (entries and exits).
+        For short puts: entry is SELL, exit is BUY.
+
+        Returns:
+            List of trade records with time, action, contract, qty, price.
+        """
+        with self.cursor() as cur:
+            # Union entries and exits into a single trade history
+            cur.execute("""
+                SELECT
+                    entry_time as time,
+                    'SELL' as action,
+                    symbol,
+                    strike,
+                    expiration,
+                    quantity as qty,
+                    entry_price as price
+                FROM trades
+                WHERE entry_time IS NOT NULL
+                UNION ALL
+                SELECT
+                    exit_time as time,
+                    'BUY' as action,
+                    symbol,
+                    strike,
+                    expiration,
+                    quantity as qty,
+                    exit_price as price
+                FROM trades
+                WHERE exit_time IS NOT NULL AND exit_price IS NOT NULL
+                ORDER BY time DESC
+            """)
+            return [dict(row) for row in cur.fetchall()]
+
     def get_strategy_summary(self) -> dict[str, Any]:
         """Get strategy summary metrics.
 
@@ -500,25 +568,15 @@ class Database:
     def get_pnl_by_month(self) -> list[dict[str, Any]]:
         """Get P&L aggregated by month.
 
+        Note: With the new trade log structure, P&L is computed by matching
+        SELL entries with BUY exits. For now, returns empty until positions
+        are closed.
+
         Returns:
             List of monthly P&L records.
         """
-        with self.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    DATE_TRUNC('month', exit_time) as month,
-                    SUM(realized_pnl) as monthly_pnl,
-                    COUNT(*) as trade_count,
-                    SUM(CASE WHEN exit_reason = 'TAKE_PROFIT' THEN 1 ELSE 0 END) as tp_count,
-                    SUM(CASE WHEN exit_reason = 'STOP_LOSS' THEN 1 ELSE 0 END) as sl_count
-                FROM trades
-                WHERE status = 'CLOSED' AND exit_time IS NOT NULL
-                GROUP BY DATE_TRUNC('month', exit_time)
-                ORDER BY month DESC
-                """
-            )
-            return list(cur.fetchall())
+        # TODO: Implement P&L calculation from matching SELL/BUY entries
+        return []
 
     # =========================================================================
     # Helper Methods
@@ -535,13 +593,8 @@ class Database:
             quantity=row["quantity"],
             entry_price=row["entry_price"],
             entry_time=row["entry_time"],
-            exit_price=row.get("exit_price"),
-            exit_time=row.get("exit_time"),
-            exit_reason=row.get("exit_reason"),
-            expected_tp_price=row["expected_tp_price"],
-            expected_sl_price=row["expected_sl_price"],
-            realized_pnl=row.get("realized_pnl"),
-            slippage=row.get("slippage"),
+            expected_tp_price=row.get("expected_tp_price"),
+            expected_sl_price=row.get("expected_sl_price"),
             status=row["status"],
             strategy_id=row["strategy_id"],
         )

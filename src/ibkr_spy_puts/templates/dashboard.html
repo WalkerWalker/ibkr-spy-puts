@@ -269,6 +269,52 @@
             color: #ffaa00;
             margin-left: 5px;
         }
+
+        /* Position rows */
+        .position-row {
+            cursor: pointer;
+        }
+        .position-row:hover {
+            background: #1f1f4a;
+        }
+        .expand-cell {
+            width: 20px;
+            text-align: center;
+        }
+        .expand-icon {
+            color: #666;
+            font-size: 10px;
+            transition: transform 0.2s;
+            display: inline-block;
+        }
+        .position-row.expanded .expand-icon {
+            transform: rotate(90deg);
+        }
+        .symbol-cell {
+            color: #00d4ff;
+            font-weight: 600;
+        }
+        .orders-row {
+            background: #12122a;
+        }
+        .orders-cell {
+            padding: 10px 20px !important;
+        }
+        .orders-table {
+            font-size: 12px;
+            width: auto;
+            margin-left: 20px;
+        }
+        .orders-table th {
+            color: #888;
+            font-size: 11px;
+            text-transform: uppercase;
+            padding: 5px 15px;
+        }
+        .orders-table td {
+            padding: 5px 15px;
+            border-bottom: none;
+        }
     </style>
 </head>
 <body>
@@ -356,7 +402,7 @@
             </div>
             <div class="metric">
                 <span class="metric-label">Unrealized P&L</span>
-                <span class="metric-value {% if (risk.total_unrealized_pnl or 0) >= 0 %}positive{% else %}negative{% endif %}">
+                <span id="unrealized-pnl" class="metric-value {% if (risk.total_unrealized_pnl or 0) >= 0 %}positive{% else %}negative{% endif %}">
                     ${{ "%.2f"|format(risk.total_unrealized_pnl or 0) }}
                 </span>
             </div>
@@ -373,12 +419,12 @@
         <div class="card">
             <h2>Greeks (All Positions)</h2>
             <div class="metric">
-                <span class="metric-label">Total Delta</span>
-                <span class="metric-value">{{ "%.2f"|format(risk.total_delta or 0) }}</span>
+                <span class="metric-label">SPY Delta</span>
+                <span id="total-delta" class="metric-value">-- SPY</span>
             </div>
             <div class="metric">
-                <span class="metric-label">Total Theta</span>
-                <span class="metric-value positive">${{ "%.2f"|format(risk.total_theta or 0) }}/day</span>
+                <span class="metric-label">Theta Income</span>
+                <span id="total-theta" class="metric-value positive">+$--/day</span>
             </div>
         </div>
     </div>
@@ -393,41 +439,38 @@
             <span class="collapse-icon">&#9660;</span>
         </div>
         <div id="positions" class="collapsible-content">
-            <table>
+            {# Build set of IBKR position keys for quick lookup #}
+            {% set ibkr_keys = [] %}
+            {% for ibkr_pos in ibkr_positions %}
+                {% set key = ibkr_pos.symbol ~ '_' ~ (ibkr_pos.strike|int) ~ '_' ~ ibkr_pos.expiration %}
+                {% set _ = ibkr_keys.append(key) %}
+            {% endfor %}
+
+            <table id="positions-table">
                 <thead>
                     <tr>
-                        <th>Symbol</th>
-                        <th>Strike</th>
-                        <th>Expiration</th>
-                        <th>Entry Date</th>
+                        <th></th>
+                        <th>Contract</th>
                         <th>DIT</th>
                         <th>DTE</th>
-                        <th>Entry $</th>
-                        <th>TP Target</th>
-                        <th>SL Target</th>
+                        <th>Entry</th>
+                        <th>P&L %</th>
+                        <th>TP</th>
+                        <th>SL</th>
                         <th>Status</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {# Build set of IBKR position keys for quick lookup #}
-                    {% set ibkr_keys = [] %}
-                    {% for ibkr_pos in ibkr_positions %}
-                        {% set key = ibkr_pos.symbol ~ '_' ~ (ibkr_pos.strike|int) ~ '_' ~ ibkr_pos.expiration %}
-                        {% set _ = ibkr_keys.append(key) %}
-                    {% endfor %}
-
                     {% for pos in positions %}
-                    {# Create key for this position (remove dashes from expiration to match IBKR format) #}
-                    {% set pos_key = pos.symbol ~ '_' ~ (pos.strike|int) ~ '_' ~ pos.expiration|replace('-', '') %}
+                    {% set pos_key = pos.symbol ~ '_' ~ (pos.strike|int) ~ '_' ~ (pos.expiration|string|replace('-', '')) %}
                     {% set is_verified = pos_key in ibkr_keys %}
-                    <tr>
-                        <td>{{ pos.symbol }}</td>
-                        <td>${{ "%.2f"|format(pos.strike) }}</td>
-                        <td>{{ pos.expiration }}</td>
-                        <td>{{ pos.trade_date }}</td>
+                    <tr class="position-row" data-position-id="{{ pos.id }}" onclick="togglePositionOrders({{ pos.id }})">
+                        <td class="expand-cell"><span class="expand-icon">&#9654;</span></td>
+                        <td class="symbol-cell">{{ pos.symbol }} {{ pos.strike|int }}P {{ pos.expiration.strftime('%m/%d') if pos.expiration else '' }}</td>
                         <td>{{ pos.days_in_trade or 0 }}</td>
                         <td>{{ pos.days_to_expiry }}</td>
                         <td>${{ "%.2f"|format(pos.entry_price) }}</td>
+                        <td class="pnl">--</td>
                         <td class="positive">${{ "%.2f"|format(pos.expected_tp_price) }}</td>
                         <td class="negative">${{ "%.2f"|format(pos.expected_sl_price) }}</td>
                         <td>
@@ -438,91 +481,86 @@
                             {% endif %}
                         </td>
                     </tr>
+                    {# Orders row (hidden by default) #}
+                    <tr class="orders-row" id="orders-{{ pos.id }}" style="display: none;">
+                        <td></td>
+                        <td colspan="8" class="orders-cell">
+                            <table class="orders-table">
+                                <tr>
+                                    <th>Type</th>
+                                    <th>Price</th>
+                                    <th>Status</th>
+                                </tr>
+                                {% for order in pos.orders %}
+                                <tr>
+                                    <td>{% if order.order_type == 'TAKE_PROFIT' %}LMT{% elif order.order_type == 'STOP_LOSS' %}STP{% else %}{{ order.order_type }}{% endif %}</td>
+                                    <td>
+                                        {% if order.limit_price %}
+                                            ${{ "%.2f"|format(order.limit_price) }}
+                                        {% elif order.stop_price %}
+                                            ${{ "%.2f"|format(order.stop_price) }}
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ order.status }}</td>
+                                </tr>
+                                {% endfor %}
+                                {% if not pos.orders %}
+                                <tr><td colspan="3" style="color: #666;">No orders</td></tr>
+                                {% endif %}
+                            </table>
+                        </td>
+                    </tr>
                     {% endfor %}
                     {% if not positions %}
                     <tr>
-                        <td colspan="10" style="text-align: center; color: #666;">No open positions</td>
+                        <td colspan="9" style="text-align: center; color: #666;">No open positions</td>
                     </tr>
                     {% endif %}
                 </tbody>
             </table>
+
+            <div style="text-align: right; margin-top: 8px; color: #666; font-size: 0.85em;">
+                <span id="positions-last-update">Fetching live data...</span>
+            </div>
         </div>
     </div>
 
-    <!-- Live Orders (Collapsible) -->
+    <!-- Trade History -->
     <div class="card">
-        <div class="collapsible-header" onclick="toggleSection('live-orders')">
+        <div class="collapsible-header" onclick="toggleSection('trade-history')">
             <h2>
-                Live Orders
-                <span class="section-count">{{ live_orders|length }}</span>
+                Trade History
+                <span class="section-count">{{ trade_history|length }}</span>
             </h2>
-            <span class="collapse-icon">&#9660;</span>
         </div>
-        <div id="live-orders" class="collapsible-content">
+        <div id="trade-history" class="collapsible-content">
             <table>
                 <thead>
                     <tr>
-                        <th>Symbol</th>
-                        <th>Strike</th>
-                        <th>Exp</th>
+                        <th>Time</th>
                         <th>Action</th>
-                        <th>Type</th>
+                        <th>Contract</th>
                         <th>Qty</th>
-                        <th>Limit</th>
-                        <th>Stop</th>
-                        <th>Status</th>
-                        <th>Filled</th>
+                        <th>Price</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {# Group orders by OCA #}
-                    {% set orders_by_oca = {} %}
-                    {% for order in live_orders %}
-                        {% set oca = order.oca_group or 'none_' ~ loop.index %}
-                        {% if oca not in orders_by_oca %}
-                            {% set _ = orders_by_oca.__setitem__(oca, []) %}
-                        {% endif %}
-                        {% set _ = orders_by_oca[oca].append(order) %}
-                    {% endfor %}
-
-                    {# Render orders with OCA brackets #}
-                    {% for oca_group, orders in orders_by_oca.items() %}
-                        {% set is_oca = orders|length > 1 and not oca_group.startswith('none_') %}
-                        {% for order in orders %}
-                            {% set oca_class = '' %}
-                            {% if is_oca %}
-                                {% if loop.first %}
-                                    {% set oca_class = 'oca-bracket oca-first' %}
-                                {% elif loop.last %}
-                                    {% set oca_class = 'oca-bracket oca-last' %}
-                                {% else %}
-                                    {% set oca_class = 'oca-bracket oca-middle' %}
-                                {% endif %}
-                            {% endif %}
-                        <tr class="{{ oca_class }}">
-                            <td>{{ order.symbol }}{% if order.right %} {{ order.right }}{% endif %}</td>
-                            <td>{% if order.strike %}${{ "%.0f"|format(order.strike) }}{% else %}-{% endif %}</td>
-                            <td>{% if order.expiration %}{{ order.expiration }}{% else %}-{% endif %}</td>
-                            <td><span class="status {{ order.action|lower }}">{{ order.action }}</span></td>
-                            <td>{{ order.order_type }}</td>
-                            <td>{{ order.quantity }}</td>
-                            <td>{% if order.limit_price %}${{ "%.2f"|format(order.limit_price) }}{% else %}-{% endif %}</td>
-                            <td>{% if order.stop_price %}${{ "%.2f"|format(order.stop_price) }}{% else %}-{% endif %}</td>
-                            <td><span class="status {{ order.status|lower }}">{{ order.status }}</span></td>
-                            <td>{{ order.filled }}/{{ order.quantity }}</td>
-                        </tr>
-                        {% endfor %}
-                    {% endfor %}
-
-                    {% if not live_orders %}
+                    {% for trade in trade_history %}
                     <tr>
-                        <td colspan="10" style="text-align: center; color: #666;">
-                            {% if connection.ready_to_trade %}
-                                No open orders
-                            {% else %}
-                                Connect to IBKR to see live orders
-                            {% endif %}
+                        <td>{{ trade.time.strftime('%Y-%m-%d %H:%M') if trade.time else '-' }}</td>
+                        <td>
+                            <span class="status {% if trade.action == 'SELL' %}open{% else %}verified{% endif %}">
+                                {{ trade.action }}
+                            </span>
                         </td>
+                        <td>{{ trade.symbol }} {{ trade.strike|int }}P {{ trade.expiration.strftime('%m/%d') if trade.expiration else '' }}</td>
+                        <td>{{ trade.qty }}</td>
+                        <td>${{ '%.2f'|format(trade.price|float) }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% if not trade_history %}
+                    <tr>
+                        <td colspan="5" style="text-align: center; color: #666;">No trades yet</td>
                     </tr>
                     {% endif %}
                 </tbody>
@@ -581,6 +619,115 @@
 
         // Initial check after page load
         setTimeout(checkConnectionStatus, 5000);
+
+        // Toggle position orders visibility
+        function togglePositionOrders(posId) {
+            const ordersRow = document.getElementById(`orders-${posId}`);
+            const posRow = document.querySelector(`tr.position-row[data-position-id="${posId}"]`);
+
+            if (ordersRow.style.display === 'none') {
+                ordersRow.style.display = 'table-row';
+                posRow.classList.add('expanded');
+            } else {
+                ordersRow.style.display = 'none';
+                posRow.classList.remove('expanded');
+            }
+        }
+
+        // Fetch live position data
+        async function fetchLivePositions() {
+            try {
+                const response = await fetch('/api/positions/live');
+                const positions = await response.json();
+
+                let totalUnrealizedPnl = 0;
+                let totalDelta = 0;
+                let totalTheta = 0;
+                let hasLiveData = false;
+
+                for (const pos of positions) {
+                    const row = document.querySelector(`tr.position-row[data-position-id="${pos.id}"]`);
+                    if (!row) continue;
+
+                    // Update P&L % only
+                    const pnlEl = row.querySelector('.pnl');
+                    if (pos.unrealized_pnl_pct !== undefined && pos.unrealized_pnl_pct !== null && pnlEl) {
+                        const pnlText = pos.unrealized_pnl_pct >= 0 ?
+                            `+${pos.unrealized_pnl_pct.toFixed(1)}%` :
+                            `${pos.unrealized_pnl_pct.toFixed(1)}%`;
+                        pnlEl.textContent = pnlText;
+                        pnlEl.className = 'pnl ' + (pos.unrealized_pnl_pct >= 0 ? 'positive' : 'negative');
+                        hasLiveData = true;
+                    }
+                    if (pos.unrealized_pnl !== undefined && pos.unrealized_pnl !== null) {
+                        totalUnrealizedPnl += pos.unrealized_pnl;
+                    }
+
+                    // Accumulate Greeks
+                    if (pos.delta !== undefined && pos.delta !== null) {
+                        const positionDelta = Math.abs(pos.delta) * 100 * (pos.quantity || 1);
+                        totalDelta += positionDelta;
+                        hasLiveData = true;
+                    }
+                    if (pos.theta !== undefined && pos.theta !== null) {
+                        const positionTheta = Math.abs(pos.theta) * 100 * (pos.quantity || 1);
+                        totalTheta += positionTheta;
+                        hasLiveData = true;
+                    }
+                }
+
+                // Update summary metrics
+                const unrealizedPnlEl = document.getElementById('unrealized-pnl');
+                const totalDeltaEl = document.getElementById('total-delta');
+                const totalThetaEl = document.getElementById('total-theta');
+
+                if (hasLiveData) {
+                    if (unrealizedPnlEl) {
+                        unrealizedPnlEl.textContent = `$${totalUnrealizedPnl.toFixed(2)}`;
+                        unrealizedPnlEl.className = 'metric-value ' + (totalUnrealizedPnl >= 0 ? 'positive' : 'negative');
+                    }
+                    if (totalDeltaEl) {
+                        totalDeltaEl.textContent = `${totalDelta.toFixed(0)} SPY`;
+                    }
+                    if (totalThetaEl) {
+                        totalThetaEl.textContent = `+$${totalTheta.toFixed(0)}/day`;
+                    }
+                } else {
+                    // No live data - market likely closed
+                    if (unrealizedPnlEl) {
+                        unrealizedPnlEl.textContent = '--';
+                        unrealizedPnlEl.className = 'metric-value neutral';
+                    }
+                    if (totalDeltaEl) {
+                        totalDeltaEl.textContent = '-- SPY';
+                    }
+                    if (totalThetaEl) {
+                        totalThetaEl.textContent = '--/day';
+                    }
+                }
+
+                // Update last fetch time
+                const updateEl = document.getElementById('positions-last-update');
+                if (updateEl) {
+                    if (hasLiveData) {
+                        updateEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+                    } else {
+                        updateEl.textContent = `Market Closed - No Live Data (${new Date().toLocaleTimeString()})`;
+                    }
+                }
+
+            } catch (error) {
+                console.error('Failed to fetch live positions:', error);
+                const updateEl = document.getElementById('positions-last-update');
+                if (updateEl) {
+                    updateEl.textContent = 'Failed to fetch live data';
+                }
+            }
+        }
+
+        // Fetch live positions on page load and every 2 minutes
+        setTimeout(fetchLivePositions, 2000);
+        setInterval(fetchLivePositions, 120000);
 
         // Full page refresh every 5 minutes for order/position updates
         setTimeout(() => location.reload(), 300000);

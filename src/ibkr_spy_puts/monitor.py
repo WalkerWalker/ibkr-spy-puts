@@ -190,12 +190,14 @@ class OrderMonitor:
             f"Closing trade {db_order['trade_id']} - {exit_reason} at ${fill_price}"
         )
 
+        # Update the trade with exit details
         self.db.update_trade_exit(
             trade_id=db_order["trade_id"],
             exit_price=fill_price,
             exit_time=fill_time,
             exit_reason=exit_reason,
         )
+        print(f"Updated trade {db_order['trade_id']}: exit at ${fill_price} ({exit_reason})")
 
         # Cancel the other bracket order in database
         # (IBKR OCO handles the actual cancellation)

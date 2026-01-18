@@ -118,6 +118,11 @@ Examples:
         action="store_true",
         help="Execute trade immediately (use with --scheduler to also continue scheduling)",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force run on non-trading days (weekends/holidays) for testing",
+    )
 
     args = parser.parse_args()
 
@@ -129,6 +134,7 @@ Examples:
             dry_run=args.dry_run,
             port=args.port,
             run_immediately=args.run_now,
+            force_run=args.force,
         )
         return
 

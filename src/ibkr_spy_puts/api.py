@@ -72,6 +72,152 @@ async def get_positions():
         db.disconnect()
 
 
+@app.get("/api/positions/live")
+async def get_positions_live():
+    """Get all open positions enriched with live IBKR data (price, Greeks, P&L)."""
+    import asyncio
+
+    db = get_db()
+    try:
+        positions = db.get_open_positions()
+
+        # Fetch live data from IBKR via subprocess
+        live_data = await asyncio.to_thread(_fetch_live_position_data, positions)
+
+        # Enrich positions with live data
+        enriched = []
+        for pos in positions:
+            pos_copy = dict(pos)
+            # Handle expiration as date object or string
+            exp = pos['expiration']
+            if hasattr(exp, 'strftime'):
+                exp_str = exp.strftime('%Y%m%d')
+            else:
+                exp_str = str(exp).replace('-', '')
+            key = f"{pos['symbol']}_{int(pos['strike'])}_{exp_str}"
+
+            if key in live_data:
+                live = live_data[key]
+                pos_copy['current_price'] = live.get('mid')
+                pos_copy['bid'] = live.get('bid')
+                pos_copy['ask'] = live.get('ask')
+                pos_copy['delta'] = live.get('delta')
+                pos_copy['theta'] = live.get('theta')
+                pos_copy['gamma'] = live.get('gamma')
+                pos_copy['vega'] = live.get('vega')
+                pos_copy['iv'] = live.get('iv')
+
+                # Calculate P&L
+                if live.get('mid') and pos['entry_price']:
+                    entry = float(pos['entry_price'])
+                    current = float(live['mid'])
+                    # For short puts: profit when price goes down
+                    pnl_per_contract = (entry - current) * 100  # Options are 100 shares
+                    pnl_pct = ((entry - current) / entry) * 100
+                    pos_copy['unrealized_pnl'] = round(pnl_per_contract * pos['quantity'], 2)
+                    pos_copy['unrealized_pnl_pct'] = round(pnl_pct, 2)
+
+            enriched.append(pos_copy)
+
+        return serialize_decimal(enriched)
+    finally:
+        db.disconnect()
+
+
+def _fetch_live_position_data(positions: list) -> dict:
+    """Fetch live data for positions from IBKR."""
+    import subprocess
+    import json
+
+    if not positions:
+        return {}
+
+    from ibkr_spy_puts.config import TWSSettings
+    tws_settings = TWSSettings()
+
+    # Build list of contracts to fetch
+    contracts_info = []
+    for pos in positions:
+        # Handle expiration as date object or string
+        exp = pos['expiration']
+        if hasattr(exp, 'strftime'):
+            exp_str = exp.strftime('%Y%m%d')
+        else:
+            exp_str = str(exp).replace('-', '')
+        contracts_info.append({
+            'symbol': pos['symbol'],
+            'strike': float(pos['strike']),
+            'expiration': exp_str,
+        })
+
+    contracts_json = json.dumps(contracts_info)
+
+    script = f'''
+import json
+import asyncio
+asyncio.set_event_loop(asyncio.new_event_loop())
+from ib_insync import IB, Option
+
+ib = IB()
+result = {{}}
+
+try:
+    ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=97, readonly=True, timeout=15)
+    ib.reqMarketDataType(3)  # Delayed data
+
+    contracts_info = {contracts_json}
+
+    for info in contracts_info:
+        key = f"{{info['symbol']}}_{{int(info['strike'])}}_{{info['expiration']}}"
+
+        opt = Option(info['symbol'], info['expiration'], info['strike'], 'P', 'SMART')
+        qualified = ib.qualifyContracts(opt)
+
+        if qualified:
+            ticker = ib.reqMktData(qualified[0], '106', False, False)
+            ib.sleep(2)
+
+            data = {{}}
+            if ticker.bid and ticker.bid > 0:
+                data['bid'] = ticker.bid
+            if ticker.ask and ticker.ask > 0:
+                data['ask'] = ticker.ask
+            if data.get('bid') and data.get('ask'):
+                data['mid'] = (data['bid'] + data['ask']) / 2
+
+            if ticker.modelGreeks:
+                g = ticker.modelGreeks
+                data['delta'] = g.delta
+                data['theta'] = g.theta
+                data['gamma'] = g.gamma
+                data['vega'] = g.vega
+                data['iv'] = g.impliedVol
+
+            ib.cancelMktData(qualified[0])
+            result[key] = data
+
+    ib.disconnect()
+except Exception as e:
+    result['error'] = str(e)
+
+print(json.dumps(result))
+'''
+
+    try:
+        proc = subprocess.run(
+            ["python", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return json.loads(proc.stdout.strip())
+    except Exception:
+        pass
+
+    return {}
+
+
 @app.get("/api/summary")
 async def get_summary():
     """Get strategy summary metrics."""
@@ -109,8 +255,7 @@ async def get_trades(status: str = None):
                 "expiration": t.expiration,
                 "quantity": t.quantity,
                 "entry_price": t.entry_price,
-                "expected_tp_price": t.expected_tp_price,
-                "expected_sl_price": t.expected_sl_price,
+                "action": t.action,
                 "status": t.status,
             } for t in trades])
         else:
@@ -159,6 +304,20 @@ async def get_pending_orders():
     try:
         orders = db.get_pending_orders()
         return serialize_decimal(orders)
+    finally:
+        db.disconnect()
+
+
+@app.get("/api/trade-history")
+async def get_trade_history():
+    """Get trade execution history.
+
+    Returns a log of all executed trades (entries and exits).
+    """
+    db = get_db()
+    try:
+        history = db.get_trade_history()
+        return serialize_decimal(history)
     finally:
         db.disconnect()
 
@@ -397,9 +556,10 @@ async def dashboard(request: Request):
     """Main dashboard page."""
     db = get_db()
     try:
-        positions = db.get_open_positions()
+        positions = db.get_positions_with_orders()
         summary = db.get_strategy_summary()
         risk = db.get_risk_metrics()
+        trade_history = db.get_trade_history()
 
         # Get connection status and live orders in one call
         ibkr_data = await get_connection_and_orders()
@@ -411,6 +571,7 @@ async def dashboard(request: Request):
                 "positions": positions,
                 "summary": summary,
                 "risk": risk,
+                "trade_history": trade_history,
                 "connection": ibkr_data["connection"],
                 "live_orders": ibkr_data["live_orders"],
                 "ibkr_positions": ibkr_data["ibkr_positions"],

@@ -1,0 +1,58 @@
+# Docker Compose Override for Paper Trading Environment
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.paper.yml --env-file .env.paper up -d
+#
+# This creates an isolated paper trading environment that can run alongside live:
+#   - Separate database volume (postgres_data_paper)
+#   - Separate container names (*-paper suffix)
+#   - Separate host ports (8001, 5433, 5901)
+#   - Paper trading mode (port 4002)
+
+services:
+  postgres:
+    container_name: ibkr-db-paper
+    environment:
+      POSTGRES_DB: ibkr_puts_paper
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data_paper:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+  ib-gateway:
+    container_name: ibkr-gateway-paper
+    environment:
+      TRADING_MODE: paper
+    ports:
+      - "4012:4001"  # Remap to avoid conflict with live
+      - "4022:4002"  # Paper API
+      - "5901:5900"  # VNC on separate port
+    volumes:
+      - ib-gateway-data-paper:/home/ibgateway/Jts
+      - ./docker/ibc/config.ini:/home/ibgateway/ibc/config.ini
+
+  trading-bot:
+    container_name: ibkr-bot-paper
+    environment:
+      TWS_HOST: ib-gateway
+      TWS_PORT: 4004  # Socat proxy port for paper trading (relays to 4002)
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ibkr_puts_paper
+      DRY_RUN: "false"
+      RUN_INTEGRATION_TESTS: "true"
+      # Paper trading uses Urgent adaptive priority for faster fills
+      STRATEGY_USE_AGGRESSIVE_FILL: "true"
+      STRATEGY_TARGET_DTE: "${STRATEGY_TARGET_DTE:-90}"
+      # Force run on weekends/holidays for testing
+      FORCE_RUN: "${FORCE_RUN:-true}"
+    volumes:
+      - ./tests:/app/tests:ro
+      - ./scripts:/app/scripts:ro
+    ports:
+      - "8001:8000"
+
+volumes:
+  postgres_data_paper:
+  ib-gateway-data-paper:

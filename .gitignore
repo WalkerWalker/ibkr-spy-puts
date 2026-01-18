@@ -28,6 +28,7 @@ htmlcov/
 
 # Environment files (contains secrets!)
 .env
+.env.paper
 !.env.docker.example
 
 # Logs
@@ -50,6 +51,9 @@ postgres_data/
 *.pem
 *.key
 credentials.json
+.aws-root-credentials
+.aws-deployer-credentials
+.env.production
 
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/

@@ -262,6 +262,7 @@ class MockIBKRClient:
         limit_price: float,
         take_profit_price: float,
         stop_loss_price: float,
+        use_aggressive_fill: bool = False,
     ) -> BracketOrderResult:
         """Simulate placing a bracket order.
 
@@ -295,6 +296,21 @@ class MockIBKRClient:
             take_profit_trade=None,
             stop_loss_trade=None,
         )
+
+    def restore_cancelled_orders(self, cancelled_orders: list) -> bool:
+        """Simulate restoring cancelled orders.
+
+        Args:
+            cancelled_orders: List of order dicts to restore.
+
+        Returns:
+            True (always succeeds in mock).
+        """
+        if cancelled_orders:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Mock: Would restore {len(cancelled_orders)} cancelled order(s)")
+        return True
 
     def __enter__(self) -> "MockIBKRClient":
         """Context manager entry."""

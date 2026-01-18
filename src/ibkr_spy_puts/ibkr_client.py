@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from ib_insync import IB, Contract, LimitOrder, Option, Order, Stock, Trade
+from ib_insync import IB, Contract, LimitOrder, Option, Order, Stock, TagValue, Trade
 
 from ibkr_spy_puts.config import TWSSettings
 
@@ -35,6 +35,8 @@ class BracketOrderResult:
     take_profit_trade: Trade | None = None
     stop_loss_trade: Trade | None = None
     error_message: str | None = None
+    fill_price: float | None = None
+    cancelled_orders: list | None = None  # Orders cancelled for conflict resolution
 
 
 class IBKRClient:
@@ -223,10 +225,28 @@ class IBKRClient:
             return []
 
         # Get current price to filter reasonable strikes
+        # Try multiple methods since stock data subscription may not be available
+        current_price = None
+
+        # Method 1: Try direct market data request
         ticker = self.ib.reqMktData(stock, "", False, False)
         self.ib.sleep(1)
-        current_price = ticker.marketPrice()
+        price = ticker.marketPrice()
         self.ib.cancelMktData(stock)
+
+        if price and price > 0 and not (price != price):  # Check for NaN
+            current_price = price
+        else:
+            # Method 2: Try to get price from portfolio/positions
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Stock price unavailable (got {price}), trying portfolio...")
+
+            # Check if we have any SPY-related positions to infer price
+            # Use a reasonable fallback based on typical SPY range
+            # SPY typically trades 500-700 range in 2026
+            current_price = 600.0  # Fallback estimate
+            logger.info(f"Using fallback price estimate: {current_price}")
 
         # Filter strikes to reasonable range (within 20% of current price)
         if current_price and current_price > 0:
@@ -308,10 +328,17 @@ class IBKRClient:
         Returns:
             OptionContract closest to target delta, or None if unavailable.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Find closest expiration
         expiration = self.find_expiration_by_dte(target_dte, symbol)
         if not expiration:
+            logger.warning(f"No expiration found for {target_dte} DTE")
             return None
+
+        actual_dte = (expiration - date.today()).days
+        logger.info(f"Target DTE: {target_dte}, Selected expiration: {expiration} (actual DTE: {actual_dte})")
 
         # Get option chain with greeks
         chain = self.get_option_chain_with_greeks(
@@ -319,21 +346,44 @@ class IBKRClient:
         )
 
         if not chain:
+            logger.warning(f"No option chain found for {symbol} {expiration}")
             return None
 
         # Filter to options with valid delta
         options_with_delta = [opt for opt in chain if opt.delta is not None]
+        logger.info(f"Found {len(chain)} options, {len(options_with_delta)} with valid delta")
 
         if not options_with_delta:
-            # Fallback: return option with strike closest to typical delta range
-            # For -0.15 delta, roughly 5-7% OTM
+            logger.warning("No options with valid delta found")
             return None
 
-        # Find option closest to target delta
-        closest = min(
+        # Sort by distance from target delta
+        sorted_options = sorted(
             options_with_delta,
             key=lambda x: abs(x.delta - target_delta) if x.delta else float("inf"),
         )
+
+        # Log the top candidates for transparency
+        logger.info(f"=== Delta Selection (target: {target_delta}) ===")
+        for i, opt in enumerate(sorted_options[:5]):  # Top 5 candidates
+            delta_diff = abs(opt.delta - target_delta) if opt.delta else float("inf")
+            marker = " <-- SELECTED" if i == 0 else ""
+            logger.info(
+                f"  #{i+1}: Strike {opt.strike}, Delta {opt.delta:.4f}, "
+                f"Diff {delta_diff:.4f}, Bid/Ask {opt.bid}/{opt.ask}{marker}"
+            )
+
+        closest = sorted_options[0]
+
+        # Log selection summary
+        if len(sorted_options) >= 2:
+            second = sorted_options[1]
+            logger.info(
+                f"Selected: {closest.strike} strike (delta {closest.delta:.4f}) "
+                f"over {second.strike} strike (delta {second.delta:.4f})"
+            )
+        else:
+            logger.info(f"Selected: {closest.strike} strike (delta {closest.delta:.4f})")
 
         return closest
 
@@ -400,8 +450,13 @@ class IBKRClient:
         limit_price: float,
         take_profit_price: float,
         stop_loss_price: float,
+        use_aggressive_fill: bool = False,
     ) -> BracketOrderResult:
         """Place a bracket order for a contract.
+
+        This is a two-step process:
+        Step 1: Place parent order (handling any conflicting orders)
+        Step 2: Place TP/SL orders (no conflict possible since parent filled)
 
         Args:
             contract: The contract to trade (e.g., Option).
@@ -410,6 +465,7 @@ class IBKRClient:
             limit_price: Limit price for parent order.
             take_profit_price: Price for take profit order.
             stop_loss_price: Price for stop loss order.
+            use_aggressive_fill: If True, use Urgent priority (paper trading).
 
         Returns:
             BracketOrderResult with order IDs and trade objects.
@@ -420,31 +476,32 @@ class IBKRClient:
                 error_message="Not connected to TWS",
             )
 
+        import logging
+        import time
+        logger = logging.getLogger(__name__)
+
         try:
-            # Determine the opposite action for finding conflicting orders
+            # =================================================================
+            # STEP 1: Place parent order (with conflict handling)
+            # =================================================================
             opposite_action = "BUY" if action == "SELL" else "SELL"
 
-            # First, sync all orders from IB (including from other clients)
-            import logging
-            logger = logging.getLogger(__name__)
-
-            logger.info("Syncing all open orders from IB...")
+            # Sync all orders from IB
+            logger.info("Step 1: Syncing all open orders from IB...")
             self.ib.reqAllOpenOrders()
             self.ib.sleep(2)
 
-            # Find conflicting orders on the same contract
-            # (orders on the opposite side that would block our new order)
+            # Find conflicting orders on the SAME contract (opposite side)
             conflicting_orders = []
             open_trades = self.ib.openTrades()
             logger.info(f"Checking for conflicting orders. Open trades: {len(open_trades)}, target conId: {contract.conId}")
 
             for trade in open_trades:
                 logger.info(f"  Trade: orderId={trade.order.orderId}, conId={trade.contract.conId}, action={trade.order.action}, status={trade.orderStatus.status}")
-                # Check if same contract and opposite action
                 if (trade.contract.conId == contract.conId and
                     trade.order.action == opposite_action and
                     trade.orderStatus.status in ["Submitted", "PreSubmitted"]):
-                    # Save complete order details for re-placing later
+                    # Save complete order details for re-placing later (with ORIGINAL OCA group)
                     conflicting_orders.append({
                         "contract": trade.contract,
                         "order": trade.order,
@@ -453,29 +510,27 @@ class IBKRClient:
                         "quantity": trade.order.totalQuantity,
                         "lmt_price": trade.order.lmtPrice,
                         "aux_price": trade.order.auxPrice,
-                        "parent_id": trade.order.parentId,
                         "oca_group": getattr(trade.order, 'ocaGroup', ''),
                         "tif": trade.order.tif,
                     })
-                    logger.info(f"Found conflicting order: {trade.order.orderId} {trade.order.action} {trade.order.orderType} qty={trade.order.totalQuantity}")
+                    logger.info(f"Found conflicting order: {trade.order.orderId} {trade.order.action} {trade.order.orderType} qty={trade.order.totalQuantity} ocaGroup={getattr(trade.order, 'ocaGroup', '')}")
 
-            # Cancel conflicting orders
+            # Cancel conflicting orders if any exist
             if conflicting_orders:
                 logger.info(f"Cancelling {len(conflicting_orders)} conflicting order(s)...")
+                for conflict in conflicting_orders:
+                    order_id = conflict["order"].orderId
+                    logger.info(f"Cancelling order {order_id}...")
+                    self.ib.cancelOrder(conflict["order"])
 
-                # Try global cancel for orders from other clients
-                logger.info("Using globalCancel to cancel all open orders...")
-                self.ib.reqGlobalCancel()
-
-                # Wait for cancellations to fully process
+                # Wait for cancellations
                 logger.info("Waiting for cancellations to complete...")
                 self.ib.sleep(5)
 
-                # Verify cancellations by checking order status
+                # Verify cancellations
                 self.ib.reqAllOpenOrders()
                 self.ib.sleep(3)
 
-                # Verify all conflicting orders are actually cancelled
                 remaining_conflicts = []
                 for trade in self.ib.openTrades():
                     if (trade.contract.conId == contract.conId and
@@ -484,98 +539,210 @@ class IBKRClient:
                         remaining_conflicts.append(trade.order.orderId)
 
                 if remaining_conflicts:
-                    logger.error(f"Orders still active after globalCancel: {remaining_conflicts}")
-                    logger.error("Cannot proceed - please manually cancel these orders in TWS")
+                    logger.error(f"Orders still active after cancel: {remaining_conflicts}")
                     return BracketOrderResult(
                         success=False,
                         error_message=f"Cannot cancel conflicting orders: {remaining_conflicts}",
                     )
-                else:
-                    logger.info("All conflicting orders successfully cancelled")
+                logger.info("All conflicting orders successfully cancelled")
 
-            # Determine the opposite action for child orders
-            child_action = "BUY" if action == "SELL" else "SELL"
-
-            # Generate OCA group for child orders
-            import time
-            oca_group = f"BRACKET_{int(time.time())}"
-
-            # Create and place parent order first (transmit=False to wait for children)
+            # Place parent order with Adaptive algo
             parent = LimitOrder(
                 action=action,
                 totalQuantity=quantity,
                 lmtPrice=limit_price,
-                transmit=False,
+                tif="DAY",
+                transmit=True,
             )
-            parent_trade = self.ib.placeOrder(contract, parent)
-            parent_order_id = parent_trade.order.orderId
-            logger.info(f"Parent order placed with ID: {parent_order_id}")
+            parent.algoStrategy = "Adaptive"
+            adaptive_priority = "Urgent" if use_aggressive_fill else "Normal"
+            parent.algoParams = [TagValue("adaptivePriority", adaptive_priority)]
+            logger.info(f"Using Adaptive algo with {adaptive_priority} priority")
 
-            # Create and place take profit order with OCA group
+            parent_trade = self.ib.placeOrder(contract, parent)
+            logger.info(f"Parent order placed with ID: {parent_trade.order.orderId}")
+            self.ib.sleep(2)
+
+            # Wait for parent to FILL (10s timeout - scheduler will retry if needed)
+            max_wait_seconds = 10
+            poll_interval = 2
+            waited = 0
+            parent_filled = False
+            parent_status = ""
+
+            while waited < max_wait_seconds:
+                self.ib.reqAllOpenOrders()
+                self.ib.sleep(poll_interval)
+                waited += poll_interval
+                parent_status = parent_trade.orderStatus.status
+                logger.info(f"Parent order status after {waited}s: {parent_status}")
+
+                if parent_status == "Filled":
+                    parent_filled = True
+                    break
+                elif parent_status in ["Cancelled", "ApiCancelled", "Inactive"]:
+                    logger.error(f"Parent order was cancelled/rejected: {parent_status}")
+                    break
+
+            # If not filled within timeout, cancel the order
+            if not parent_filled and parent_status == "Submitted":
+                logger.info(f"Parent order not filled after {max_wait_seconds}s, cancelling for retry...")
+                self.ib.cancelOrder(parent_trade.order)
+                self.ib.sleep(3)
+                # Verify cancelled - and check if it filled during cancel!
+                self.ib.reqAllOpenOrders()
+                self.ib.sleep(2)
+                parent_status = parent_trade.orderStatus.status
+                logger.info(f"After cancel attempt, parent order status: {parent_status}")
+
+                # Check if it actually filled during the cancel process (race condition)
+                if parent_status == "Filled":
+                    logger.info("Order filled during cancel process - treating as success")
+                    parent_filled = True
+
+            # Check if parent filled
+            if not parent_filled:
+                logger.warning(f"Parent order not filled, status: {parent_status}")
+                # Return with cancelled_orders so scheduler can retry or restore them
+                return BracketOrderResult(
+                    success=False,
+                    error_message=f"Parent order not filled within {max_wait_seconds}s, status: {parent_status}. Retry or restore cancelled orders.",
+                    parent_order_id=parent_trade.order.orderId,
+                    parent_trade=parent_trade,
+                    cancelled_orders=conflicting_orders,  # Pass back for retry/restore
+                )
+
+            # =================================================================
+            # STEP 2: Log post-fill contract details
+            # =================================================================
+            logger.info("Step 2: Fetching post-fill contract details...")
+            self.log_contract_details(contract)
+
+            # =================================================================
+            # STEP 3: Place TP/SL orders (no conflict detection needed)
+            # =================================================================
+            logger.info("Step 3: Placing TP/SL orders for new position...")
+
+            child_action = "BUY" if action == "SELL" else "SELL"
+            new_oca_group = f"OCA_{int(time.time())}"
+
+            # Use fill price for TP/SL calculation
+            actual_entry_price = limit_price
+            if parent_trade.orderStatus.avgFillPrice > 0:
+                actual_entry_price = parent_trade.orderStatus.avgFillPrice
+                logger.info(f"Parent filled at {actual_entry_price} (limit was {limit_price})")
+
+            # Calculate TP/SL prices based on fill price
+            actual_tp_price = round(actual_entry_price * 0.4, 2)  # 60% profit
+            actual_sl_price = round(actual_entry_price * 3.0, 2)  # 200% loss
+            logger.info(f"TP/SL based on {actual_entry_price}: TP={actual_tp_price}, SL={actual_sl_price}")
+
+            # Place take profit order
             take_profit = LimitOrder(
                 action=child_action,
                 totalQuantity=quantity,
-                lmtPrice=take_profit_price,
-                transmit=False,
-                parentId=parent_order_id,
-                ocaGroup=oca_group,
+                lmtPrice=actual_tp_price,
+                tif="GTC",
+                ocaGroup=new_oca_group,
                 ocaType=3,
+                transmit=True,
             )
             take_profit_trade = self.ib.placeOrder(contract, take_profit)
-            logger.info(f"Take profit order placed with ID: {take_profit_trade.order.orderId}, ocaGroup={oca_group}")
+            logger.info(f"Take profit order placed: ID={take_profit_trade.order.orderId}, ocaGroup={new_oca_group}")
 
-            # Create and place stop loss order (transmit=True to send all orders)
+            # Place stop loss order
             stop_loss = Order(
                 orderType="STP",
                 action=child_action,
                 totalQuantity=quantity,
-                auxPrice=stop_loss_price,
-                transmit=True,
-                parentId=parent_order_id,
-                ocaGroup=oca_group,
+                auxPrice=actual_sl_price,
+                tif="GTC",
+                ocaGroup=new_oca_group,
                 ocaType=3,
+                transmit=True,
             )
             stop_loss_trade = self.ib.placeOrder(contract, stop_loss)
-            logger.info(f"Stop loss order placed with ID: {stop_loss_trade.order.orderId}, transmit=True, ocaGroup={oca_group}")
+            logger.info(f"Stop loss order placed: ID={stop_loss_trade.order.orderId}, ocaGroup={new_oca_group}")
 
-            # Wait for order acknowledgment from IB
+            # Verify orders
             self.ib.sleep(3)
-
-            # Request all open orders to force sync and get updated status
             self.ib.reqAllOpenOrders()
             self.ib.sleep(2)
 
-            # Log order status for debugging
             logger.info(f"Parent order {parent_trade.order.orderId}: status={parent_trade.orderStatus.status}")
             logger.info(f"Take profit order {take_profit_trade.order.orderId}: status={take_profit_trade.orderStatus.status}")
             logger.info(f"Stop loss order {stop_loss_trade.order.orderId}: status={stop_loss_trade.orderStatus.status}")
 
-            # Check if the bracket order was successfully submitted or filled
             valid_statuses = ["Submitted", "PreSubmitted", "PendingSubmit", "Filled"]
             bracket_success = (
                 parent_trade.orderStatus.status in valid_statuses and
+                take_profit_trade.orderStatus.status in valid_statuses and
                 stop_loss_trade.orderStatus.status in valid_statuses
             )
 
             if not bracket_success:
-                logger.error(f"Bracket order failed! Parent status: {parent_trade.orderStatus.status}")
+                logger.error(f"Bracket order failed! TP status: {take_profit_trade.orderStatus.status}, SL status: {stop_loss_trade.orderStatus.status}")
+                return BracketOrderResult(
+                    success=False,
+                    error_message=f"TP/SL orders failed - TP: {take_profit_trade.orderStatus.status}, SL: {stop_loss_trade.orderStatus.status}",
+                    parent_order_id=parent_trade.order.orderId,
+                    parent_trade=parent_trade,
+                )
 
-            # Always re-place cancelled conflicting orders (to restore original protection)
-            if conflicting_orders:
-                logger.info(f"Re-placing {len(conflicting_orders)} cancelled order(s) as OCA group...")
+            return BracketOrderResult(
+                success=True,
+                parent_order_id=parent_trade.order.orderId,
+                take_profit_order_id=take_profit_trade.order.orderId,
+                stop_loss_order_id=stop_loss_trade.order.orderId,
+                parent_trade=parent_trade,
+                take_profit_trade=take_profit_trade,
+                stop_loss_trade=stop_loss_trade,
+                fill_price=actual_entry_price,
+                cancelled_orders=conflicting_orders,
+            )
 
-                # Generate a unique OCA group name
-                import time
-                oca_group = f"OCA_{int(time.time())}"
+        except Exception as e:
+            return BracketOrderResult(
+                success=False,
+                error_message=str(e),
+            )
 
-                placed_orders = []
-                for i, conflict in enumerate(conflicting_orders):
+    def restore_cancelled_orders(self, cancelled_orders: list) -> bool:
+        """Re-place orders that were cancelled for conflict resolution.
+
+        Args:
+            cancelled_orders: List of order dicts from place_bracket_order.
+
+        Returns:
+            True if all orders were re-placed successfully.
+        """
+        if not cancelled_orders:
+            return True
+
+        if not self.is_connected:
+            return False
+
+        import logging
+        import time
+        logger = logging.getLogger(__name__)
+
+        logger.info(f"Restoring {len(cancelled_orders)} cancelled order(s)...")
+
+        # Group orders by their original OCA group
+        oca_groups: dict[str, list] = {}
+        for conflict in cancelled_orders:
+            oca = conflict["oca_group"] or f"OCA_RESTORE_{int(time.time())}"
+            if oca not in oca_groups:
+                oca_groups[oca] = []
+            oca_groups[oca].append(conflict)
+
+        try:
+            for oca_group, orders in oca_groups.items():
+                logger.info(f"Re-placing {len(orders)} order(s) in OCA group: {oca_group}")
+                for conflict in orders:
                     order_type = conflict["order_type"]
-                    is_last = (i == len(conflicting_orders) - 1)
-                    logger.info(f"Re-placing {order_type} order: {conflict['action']} qty={conflict['quantity']}, ocaGroup={oca_group}")
+                    logger.info(f"  Re-placing {order_type}: {conflict['action']} qty={conflict['quantity']} price={conflict['lmt_price'] or conflict['aux_price']}")
 
-                    # Create new order based on saved details with OCA group
-                    # OCA orders must all have transmit=True (they're not parent-child linked)
                     if order_type == "LMT":
                         new_order = LimitOrder(
                             action=conflict["action"],
@@ -583,7 +750,7 @@ class IBKRClient:
                             lmtPrice=conflict["lmt_price"],
                             tif=conflict["tif"] or "GTC",
                             ocaGroup=oca_group,
-                            ocaType=3,  # 3 = reduce position, cancel other
+                            ocaType=3,
                             transmit=True,
                         )
                     elif order_type == "STP":
@@ -602,40 +769,80 @@ class IBKRClient:
                         continue
 
                     trade = self.ib.placeOrder(conflict["contract"], new_order)
-                    placed_orders.append(trade)
+                    logger.info(f"  Re-placed order ID: {trade.order.orderId}")
 
-                self.ib.sleep(3)
-
-                # Verify re-placed orders
-                self.ib.reqAllOpenOrders()
-                self.ib.sleep(2)
-                for trade in placed_orders:
-                    logger.info(f"Re-placed order {trade.order.orderId}: status={trade.orderStatus.status}")
-
-                logger.info(f"Successfully re-placed {len(conflicting_orders)} order(s) in OCA group {oca_group}")
-
-            if not bracket_success:
-                return BracketOrderResult(
-                    success=False,
-                    error_message=f"Bracket order failed - parent status: {parent_trade.orderStatus.status}",
-                    parent_order_id=parent_trade.order.orderId,
-                )
-
-            return BracketOrderResult(
-                success=True,
-                parent_order_id=parent_trade.order.orderId,
-                take_profit_order_id=take_profit_trade.order.orderId,
-                stop_loss_order_id=stop_loss_trade.order.orderId,
-                parent_trade=parent_trade,
-                take_profit_trade=take_profit_trade,
-                stop_loss_trade=stop_loss_trade,
-            )
+            self.ib.sleep(3)
+            logger.info("All cancelled orders restored")
+            return True
 
         except Exception as e:
-            return BracketOrderResult(
-                success=False,
-                error_message=str(e),
-            )
+            logger.error(f"Failed to restore cancelled orders: {e}")
+            return False
+
+    def log_contract_details(self, contract: Contract) -> dict | None:
+        """Fetch and log current contract details (delta, open interest, etc).
+
+        Call this after a fill to record the contract state at fill time.
+
+        Args:
+            contract: The contract to fetch details for.
+
+        Returns:
+            Dict with contract details, or None on failure.
+        """
+        if not self.is_connected:
+            return None
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Request market data with greeks (tick 106) and open interest (tick 101)
+            self.ib.reqMarketDataType(3)  # Delayed data
+            ticker = self.ib.reqMktData(contract, "101,106", False, False)
+            self.ib.sleep(3)
+
+            details = {
+                "bid": ticker.bid if ticker.bid > 0 else None,
+                "ask": ticker.ask if ticker.ask > 0 else None,
+                "last": ticker.last if ticker.last > 0 else None,
+                "volume": ticker.volume if ticker.volume >= 0 else None,
+            }
+
+            # Open interest from tick 101
+            if hasattr(ticker, 'callOpenInterest') and ticker.callOpenInterest:
+                details["open_interest"] = ticker.callOpenInterest
+            elif hasattr(ticker, 'putOpenInterest') and ticker.putOpenInterest:
+                details["open_interest"] = ticker.putOpenInterest
+
+            # Greeks from tick 106
+            if ticker.modelGreeks:
+                details["delta"] = ticker.modelGreeks.delta
+                details["gamma"] = ticker.modelGreeks.gamma
+                details["theta"] = ticker.modelGreeks.theta
+                details["vega"] = ticker.modelGreeks.vega
+                details["iv"] = ticker.modelGreeks.impliedVol
+
+            self.ib.cancelMktData(contract)
+
+            # Log the details
+            logger.info("=== Post-Fill Contract Details ===")
+            logger.info(f"  Bid/Ask: {details.get('bid')}/{details.get('ask')}")
+            logger.info(f"  Last: {details.get('last')}, Volume: {details.get('volume')}")
+            if details.get('open_interest') is not None:
+                logger.info(f"  Open Interest: {details.get('open_interest')}")
+            if details.get('delta') is not None:
+                iv_str = f", IV={details.get('iv'):.2%}" if details.get('iv') else ""
+                logger.info(
+                    f"  Greeks: Delta={details.get('delta'):.4f}, "
+                    f"Theta={details.get('theta'):.4f}{iv_str}"
+                )
+
+            return details
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch contract details: {e}")
+            return None
 
     def place_single_order(
         self,

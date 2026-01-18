@@ -118,15 +118,18 @@ class TradingScheduler:
         self,
         trade_func: Callable[[], None],
         settings: ScheduleSettings | None = None,
+        force_run: bool = False,
     ):
         """Initialize the scheduler.
 
         Args:
             trade_func: Function to call when it's time to trade.
             settings: Schedule settings.
+            force_run: If True, bypass trading day check (for testing on weekends).
         """
         self.trade_func = trade_func
         self.settings = settings or ScheduleSettings()
+        self.force_run = force_run
         self.calendar = MarketCalendar()
         self.scheduler = BlockingScheduler(timezone=self.settings.timezone)
         self._setup_signal_handlers()
@@ -146,8 +149,11 @@ class TradingScheduler:
         today = date.today()
 
         if not self.calendar.is_trading_day(today):
-            logger.info(f"Skipping trade - {today} is not a trading day")
-            return
+            if self.force_run:
+                logger.warning(f"Force running trade on non-trading day: {today}")
+            else:
+                logger.info(f"Skipping trade - {today} is not a trading day")
+                return
 
         logger.info(f"Executing scheduled trade for {today}")
         try:
@@ -171,9 +177,10 @@ class TradingScheduler:
         """Start the scheduler."""
         hour, minute = self._parse_trade_time()
 
-        # Schedule: Monday-Friday at the specified time
+        # Schedule: Monday-Friday normally, or all days if force_run is enabled
+        day_of_week = "mon-sun" if self.force_run else "mon-fri"
         trigger = CronTrigger(
-            day_of_week="mon-fri",
+            day_of_week=day_of_week,
             hour=hour,
             minute=minute,
             timezone=self.settings.timezone,
@@ -300,6 +307,22 @@ def create_trade_function(
             if result.success and not dry_run and trade_order:
                 logger.info("Recording trade to database...")
 
+                # Determine actual entry price - use fill price if available, else limit price
+                entry_price = trade_order.limit_price
+                if result.fill_price and result.fill_price > 0:
+                    entry_price = result.fill_price
+                    logger.info(f"Using actual fill price: {entry_price} (limit was {trade_order.limit_price})")
+
+                # Recalculate TP/SL based on actual entry price
+                from ibkr_spy_puts.strategy import BracketPrices
+                from ibkr_spy_puts.config import BracketSettings
+                bracket_settings = BracketSettings()
+                actual_bracket = BracketPrices.calculate(
+                    sell_price=entry_price,
+                    take_profit_pct=bracket_settings.take_profit_pct,
+                    stop_loss_pct=bracket_settings.stop_loss_pct,
+                )
+
                 # Create trade record
                 db_trade = Trade(
                     trade_date=date.today(),
@@ -307,10 +330,10 @@ def create_trade_function(
                     strike=Decimal(str(trade_order.option.strike)),
                     expiration=trade_order.option.expiration,
                     quantity=trade_order.quantity,
-                    entry_price=Decimal(str(trade_order.limit_price)),
+                    entry_price=Decimal(str(entry_price)),
                     entry_time=datetime.now(),
-                    expected_tp_price=Decimal(str(trade_order.bracket_prices.take_profit_price)),
-                    expected_sl_price=Decimal(str(trade_order.bracket_prices.stop_loss_price)),
+                    expected_tp_price=Decimal(str(actual_bracket.take_profit_price)),
+                    expected_sl_price=Decimal(str(actual_bracket.stop_loss_price)),
                     status="OPEN",
                     strategy_id="spy-put-selling",
                 )
@@ -319,6 +342,7 @@ def create_trade_function(
 
                 # Record parent order
                 if result.parent_order_id:
+                    parent_status = "FILLED" if result.fill_price else "SUBMITTED"
                     parent_order = Order(
                         trade_id=trade_id,
                         ibkr_order_id=result.parent_order_id,
@@ -326,13 +350,14 @@ def create_trade_function(
                         action="SELL",
                         order_class="LMT",
                         limit_price=Decimal(str(trade_order.limit_price)),
+                        fill_price=Decimal(str(entry_price)) if parent_status == "FILLED" else None,
                         quantity=trade_order.quantity,
-                        status="SUBMITTED",
+                        status=parent_status,
                         algo_strategy="Adaptive",
                         algo_priority="Normal",
                     )
                     db.insert_order(parent_order)
-                    logger.info(f"Recorded parent order: {result.parent_order_id}")
+                    logger.info(f"Recorded parent order: {result.parent_order_id} ({parent_status})")
 
                 # Record take profit order
                 if result.take_profit_order_id:
@@ -342,9 +367,9 @@ def create_trade_function(
                         order_type="TAKE_PROFIT",
                         action="BUY",
                         order_class="LMT",
-                        limit_price=Decimal(str(trade_order.bracket_prices.take_profit_price)),
+                        limit_price=Decimal(str(actual_bracket.take_profit_price)),
                         quantity=trade_order.quantity,
-                        status="PRESUBMITTED",
+                        status="SUBMITTED",
                     )
                     db.insert_order(tp_order)
                     logger.info(f"Recorded take profit order: {result.take_profit_order_id}")
@@ -357,7 +382,7 @@ def create_trade_function(
                         order_type="STOP_LOSS",
                         action="BUY",
                         order_class="STP",
-                        stop_price=Decimal(str(trade_order.bracket_prices.stop_loss_price)),
+                        stop_price=Decimal(str(actual_bracket.stop_loss_price)),
                         quantity=trade_order.quantity,
                         status="PRESUBMITTED",
                     )
@@ -382,6 +407,7 @@ def run_scheduler(
     dry_run: bool = False,
     port: int | None = None,
     run_immediately: bool = False,
+    force_run: bool = False,
 ):
     """Run the trading scheduler.
 
@@ -390,6 +416,7 @@ def run_scheduler(
         dry_run: Don't actually place orders.
         port: TWS port override.
         run_immediately: Execute trade immediately before starting scheduler.
+        force_run: Bypass trading day check (for weekend testing).
     """
     # Reload settings after dotenv is loaded
     import os
@@ -397,6 +424,9 @@ def run_scheduler(
         trade_time=os.getenv("SCHEDULE_TRADE_TIME", "09:30"),
         timezone=os.getenv("SCHEDULE_TIMEZONE", "America/New_York"),
     )
+
+    # Check for force run from environment
+    force_run = force_run or os.getenv("FORCE_RUN", "").lower() in ("true", "1", "yes")
 
     settings = get_settings()
     trade_func = create_trade_function(
@@ -408,6 +438,7 @@ def run_scheduler(
     scheduler = TradingScheduler(
         trade_func=trade_func,
         settings=schedule_settings,
+        force_run=force_run,
     )
 
     logger.info("=" * 60)
@@ -418,6 +449,8 @@ def run_scheduler(
     if not use_mock:
         logger.info(f"TWS Port: {port or settings.tws.port}")
     logger.info(f"Run Immediately: {run_immediately}")
+    if force_run:
+        logger.warning("Force Run: ENABLED (will run on non-trading days)")
     logger.info("=" * 60)
 
     # Execute immediately if requested
