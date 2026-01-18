@@ -66,6 +66,7 @@ services:
   # Trading Bot (Scheduler + Dashboard)
   # ===========================================================================
   trading-bot:
+    image: ${TRADING_BOT_IMAGE:-ibkr-spy-puts-trading-bot}
     build: .
     container_name: ibkr-bot
     environment:

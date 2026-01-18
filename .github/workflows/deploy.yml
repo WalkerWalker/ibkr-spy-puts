@@ -1,12 +1,43 @@
-name: Deploy to AWS
+name: Build and Deploy
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
   deploy:
+    needs: build-and-push
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to EC2
@@ -18,17 +49,20 @@ jobs:
           script: |
             cd ~/ibkr-spy-puts
 
-            # Pull latest code
+            # Pull latest code (for docker-compose.yml and .env updates)
             git fetch origin main
             git reset --hard origin/main
 
-            # Stop existing containers
-            docker-compose down || true
+            # Pull the pre-built image from GHCR (public, no auth needed)
+            sudo docker pull ghcr.io/walkerwalker/ibkr-spy-puts:latest
 
-            # Build and start with latest code
-            docker-compose build --no-cache
-            docker-compose up -d
+            # Stop and remove old trading-bot container
+            sudo docker-compose stop trading-bot || true
+            sudo docker-compose rm -f trading-bot || true
+
+            # Start with new image (uses image: directive from docker-compose)
+            sudo TRADING_BOT_IMAGE=ghcr.io/walkerwalker/ibkr-spy-puts:latest docker-compose up -d trading-bot
 
             # Show status
-            docker-compose ps
+            sudo docker-compose ps
             echo "Deployment complete!"
