@@ -46,9 +46,8 @@ services:
       TZ: ${TZ:-America/New_York}
       READ_ONLY_API: "no"
       # IBC restart/2FA settings
-      RELOGIN_AFTER_2FA_TIMEOUT: "yes"
-      AUTO_RESTART_TIME: "11:45 PM"
-      COLD_RESTART_TIME: "10:00 AM"
+      AUTO_RESTART_TIME: "11:45 PM"    # Daily restart without 2FA
+      TWOFA_TIMEOUT_ACTION: "restart"  # Auto-retry if 2FA times out
     ports:
       - "4001:4001"  # Live API
       - "4002:4002"  # Paper API
