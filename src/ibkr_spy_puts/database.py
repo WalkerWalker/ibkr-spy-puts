@@ -72,7 +72,6 @@ class BookSnapshot:
     total_vega: Decimal | None = None
     unrealized_pnl: Decimal | None = None
     maintenance_margin: Decimal | None = None
-    buying_power: Decimal | None = None
     spy_price: Decimal | None = None
 
 
@@ -393,12 +392,12 @@ class Database:
                     snapshot_date, snapshot_time,
                     open_positions, total_contracts,
                     total_delta, total_theta, total_gamma, total_vega,
-                    unrealized_pnl, maintenance_margin, buying_power, spy_price
+                    unrealized_pnl, maintenance_margin, spy_price
                 ) VALUES (
                     %(snapshot_date)s, %(snapshot_time)s,
                     %(open_positions)s, %(total_contracts)s,
                     %(total_delta)s, %(total_theta)s, %(total_gamma)s, %(total_vega)s,
-                    %(unrealized_pnl)s, %(maintenance_margin)s, %(buying_power)s, %(spy_price)s
+                    %(unrealized_pnl)s, %(maintenance_margin)s, %(spy_price)s
                 )
                 ON CONFLICT (snapshot_date) DO UPDATE SET
                     snapshot_time = EXCLUDED.snapshot_time,
@@ -410,7 +409,6 @@ class Database:
                     total_vega = EXCLUDED.total_vega,
                     unrealized_pnl = EXCLUDED.unrealized_pnl,
                     maintenance_margin = EXCLUDED.maintenance_margin,
-                    buying_power = EXCLUDED.buying_power,
                     spy_price = EXCLUDED.spy_price
                 RETURNING id
                 """,
@@ -425,7 +423,6 @@ class Database:
                     "total_vega": snapshot.total_vega,
                     "unrealized_pnl": snapshot.unrealized_pnl,
                     "maintenance_margin": snapshot.maintenance_margin,
-                    "buying_power": snapshot.buying_power,
                     "spy_price": snapshot.spy_price,
                 },
             )
@@ -448,7 +445,7 @@ class Database:
                     id, snapshot_date, snapshot_time,
                     open_positions, total_contracts,
                     total_delta, total_theta, total_gamma, total_vega,
-                    unrealized_pnl, maintenance_margin, buying_power, spy_price
+                    unrealized_pnl, maintenance_margin, spy_price
                 FROM book_snapshots
                 ORDER BY snapshot_date DESC
                 LIMIT %s
@@ -473,7 +470,7 @@ class Database:
                     id, snapshot_date, snapshot_time,
                     open_positions, total_contracts,
                     total_delta, total_theta, total_gamma, total_vega,
-                    unrealized_pnl, maintenance_margin, buying_power, spy_price
+                    unrealized_pnl, maintenance_margin, spy_price
                 FROM book_snapshots
                 WHERE snapshot_date = %s
                 """,

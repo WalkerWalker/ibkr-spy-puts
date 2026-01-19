@@ -470,15 +470,13 @@ def create_snapshot_function(port: int | None = None) -> Callable[[], None]:
             spy_price = client.get_spy_price()
             logger.info(f"SPY price: {spy_price}")
 
-            # Get account summary for margin and buying power
+            # Get account summary for margin
             account_summary = client.get_account_summary()
             maintenance_margin = None
-            buying_power = None
             unrealized_pnl = None
 
             if account_summary:
                 maintenance_margin = account_summary.get("MaintMarginReq")
-                buying_power = account_summary.get("BuyingPower")
                 unrealized_pnl = account_summary.get("UnrealizedPnL")
 
             # Aggregate Greeks from live positions
@@ -518,7 +516,6 @@ def create_snapshot_function(port: int | None = None) -> Callable[[], None]:
                 total_vega=total_vega if total_vega else None,
                 unrealized_pnl=Decimal(str(unrealized_pnl)) if unrealized_pnl else None,
                 maintenance_margin=Decimal(str(maintenance_margin)) if maintenance_margin else None,
-                buying_power=Decimal(str(buying_power)) if buying_power else None,
                 spy_price=Decimal(str(spy_price)) if spy_price else None,
             )
 

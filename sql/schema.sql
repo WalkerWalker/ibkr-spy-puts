@@ -101,7 +101,6 @@ CREATE TABLE book_snapshots (
 
     -- Risk metrics
     maintenance_margin DECIMAL(12,2),
-    buying_power DECIMAL(12,2),
 
     -- SPY reference
     spy_price DECIMAL(10,2),
