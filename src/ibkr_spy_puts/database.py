@@ -54,6 +54,28 @@ class Position:
     strategy_id: str = "spy-put-selling"
 
 
+@dataclass
+class BookSnapshot:
+    """Daily snapshot of portfolio metrics.
+
+    Captured at end of each trading day for historical tracking.
+    """
+
+    id: int | None = None
+    snapshot_date: date | None = None
+    snapshot_time: datetime | None = None
+    open_positions: int = 0
+    total_contracts: int = 0
+    total_delta: Decimal | None = None
+    total_theta: Decimal | None = None
+    total_gamma: Decimal | None = None
+    total_vega: Decimal | None = None
+    unrealized_pnl: Decimal | None = None
+    maintenance_margin: Decimal | None = None
+    buying_power: Decimal | None = None
+    spy_price: Decimal | None = None
+
+
 class Database:
     """Database connection and operations."""
 
@@ -350,6 +372,115 @@ class Database:
             """)
             result = cur.fetchone()
             return dict(result) if result else {}
+
+    # =========================================================================
+    # Book Snapshot Operations
+    # =========================================================================
+
+    def insert_snapshot(self, snapshot: BookSnapshot) -> int:
+        """Insert a daily book snapshot.
+
+        Args:
+            snapshot: BookSnapshot to insert.
+
+        Returns:
+            The new snapshot ID.
+        """
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO book_snapshots (
+                    snapshot_date, snapshot_time,
+                    open_positions, total_contracts,
+                    total_delta, total_theta, total_gamma, total_vega,
+                    unrealized_pnl, maintenance_margin, buying_power, spy_price
+                ) VALUES (
+                    %(snapshot_date)s, %(snapshot_time)s,
+                    %(open_positions)s, %(total_contracts)s,
+                    %(total_delta)s, %(total_theta)s, %(total_gamma)s, %(total_vega)s,
+                    %(unrealized_pnl)s, %(maintenance_margin)s, %(buying_power)s, %(spy_price)s
+                )
+                ON CONFLICT (snapshot_date) DO UPDATE SET
+                    snapshot_time = EXCLUDED.snapshot_time,
+                    open_positions = EXCLUDED.open_positions,
+                    total_contracts = EXCLUDED.total_contracts,
+                    total_delta = EXCLUDED.total_delta,
+                    total_theta = EXCLUDED.total_theta,
+                    total_gamma = EXCLUDED.total_gamma,
+                    total_vega = EXCLUDED.total_vega,
+                    unrealized_pnl = EXCLUDED.unrealized_pnl,
+                    maintenance_margin = EXCLUDED.maintenance_margin,
+                    buying_power = EXCLUDED.buying_power,
+                    spy_price = EXCLUDED.spy_price
+                RETURNING id
+                """,
+                {
+                    "snapshot_date": snapshot.snapshot_date or date.today(),
+                    "snapshot_time": snapshot.snapshot_time or datetime.now(),
+                    "open_positions": snapshot.open_positions,
+                    "total_contracts": snapshot.total_contracts,
+                    "total_delta": snapshot.total_delta,
+                    "total_theta": snapshot.total_theta,
+                    "total_gamma": snapshot.total_gamma,
+                    "total_vega": snapshot.total_vega,
+                    "unrealized_pnl": snapshot.unrealized_pnl,
+                    "maintenance_margin": snapshot.maintenance_margin,
+                    "buying_power": snapshot.buying_power,
+                    "spy_price": snapshot.spy_price,
+                },
+            )
+            result = cur.fetchone()
+            return result["id"]
+
+    def get_snapshots(self, limit: int = 30) -> list[dict[str, Any]]:
+        """Get recent book snapshots.
+
+        Args:
+            limit: Maximum number of snapshots to return.
+
+        Returns:
+            List of snapshot records ordered by date descending.
+        """
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, snapshot_date, snapshot_time,
+                    open_positions, total_contracts,
+                    total_delta, total_theta, total_gamma, total_vega,
+                    unrealized_pnl, maintenance_margin, buying_power, spy_price
+                FROM book_snapshots
+                ORDER BY snapshot_date DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return [dict(row) for row in cur.fetchall()]
+
+    def get_snapshot_by_date(self, snapshot_date: date) -> dict[str, Any] | None:
+        """Get snapshot for a specific date.
+
+        Args:
+            snapshot_date: Date to retrieve snapshot for.
+
+        Returns:
+            Snapshot dict or None if not found.
+        """
+        with self.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, snapshot_date, snapshot_time,
+                    open_positions, total_contracts,
+                    total_delta, total_theta, total_gamma, total_vega,
+                    unrealized_pnl, maintenance_margin, buying_power, spy_price
+                FROM book_snapshots
+                WHERE snapshot_date = %s
+                """,
+                (snapshot_date,),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
 
     # =========================================================================
     # Helper Methods

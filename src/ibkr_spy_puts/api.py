@@ -242,6 +242,20 @@ async def get_trade_history():
         db.disconnect()
 
 
+@app.get("/api/snapshots")
+async def get_snapshots(limit: int = 30):
+    """Get recent daily book snapshots.
+
+    Returns historical P&L, Greeks, and margin data captured at market close.
+    """
+    db = get_db()
+    try:
+        snapshots = db.get_snapshots(limit=limit)
+        return serialize_decimal(snapshots)
+    finally:
+        db.disconnect()
+
+
 # =============================================================================
 # Connection Status & Live Orders
 # =============================================================================

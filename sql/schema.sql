@@ -79,6 +79,40 @@ CREATE INDEX idx_positions_status ON positions(status);
 CREATE INDEX idx_positions_expiration ON positions(expiration);
 CREATE INDEX idx_positions_strategy ON positions(strategy_id);
 
+-- book_snapshots: Daily snapshot of portfolio metrics
+-- Captured at end of each trading day for historical tracking.
+CREATE TABLE book_snapshots (
+    id SERIAL PRIMARY KEY,
+    snapshot_date DATE NOT NULL,
+    snapshot_time TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+    -- Position counts
+    open_positions INT NOT NULL,
+    total_contracts INT NOT NULL,
+
+    -- Greeks (aggregated across all positions)
+    total_delta DECIMAL(10,4),
+    total_theta DECIMAL(10,4),
+    total_gamma DECIMAL(10,6),
+    total_vega DECIMAL(10,4),
+
+    -- P&L
+    unrealized_pnl DECIMAL(12,2),
+
+    -- Risk metrics
+    maintenance_margin DECIMAL(12,2),
+    buying_power DECIMAL(12,2),
+
+    -- SPY reference
+    spy_price DECIMAL(10,2),
+
+    -- One snapshot per day
+    UNIQUE(snapshot_date)
+);
+
+-- Index for date queries
+CREATE INDEX idx_book_snapshots_date ON book_snapshots(snapshot_date);
+
 -- ============================================================================
 -- FUNCTIONS
 -- ============================================================================

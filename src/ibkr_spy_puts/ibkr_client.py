@@ -884,6 +884,70 @@ class IBKRClient:
             print(f"Order placement failed: {e}")
             return None
 
+    def get_option_greeks(
+        self,
+        symbol: str,
+        strike: float,
+        expiration: date,
+        right: str = "P",
+    ) -> dict | None:
+        """Get Greeks for a specific option contract.
+
+        Args:
+            symbol: Underlying symbol (e.g., 'SPY').
+            strike: Strike price.
+            expiration: Expiration date.
+            right: 'P' for put, 'C' for call.
+
+        Returns:
+            Dict with delta, theta, gamma, vega, iv or None on failure.
+        """
+        if not self.is_connected:
+            return None
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Create option contract
+            exp_str = expiration.strftime("%Y%m%d")
+            opt = Option(symbol, exp_str, strike, right, "SMART")
+            qualified = self.ib.qualifyContracts(opt)
+
+            if not qualified:
+                logger.warning(f"Could not qualify option {symbol} {strike} {expiration}")
+                return None
+
+            # Request market data with greeks (tick 106)
+            self.ib.reqMarketDataType(3)  # Delayed data
+            ticker = self.ib.reqMktData(qualified[0], "106", False, False)
+            self.ib.sleep(2)
+
+            result = {}
+
+            if ticker.modelGreeks:
+                result["delta"] = ticker.modelGreeks.delta
+                result["gamma"] = ticker.modelGreeks.gamma
+                result["theta"] = ticker.modelGreeks.theta
+                result["vega"] = ticker.modelGreeks.vega
+                result["iv"] = ticker.modelGreeks.impliedVol
+
+            # Also get bid/ask/mid for P&L calculation
+            if ticker.bid and ticker.bid > 0:
+                result["bid"] = ticker.bid
+            if ticker.ask and ticker.ask > 0:
+                result["ask"] = ticker.ask
+            if result.get("bid") and result.get("ask"):
+                result["mid"] = (result["bid"] + result["ask"]) / 2
+
+            self.ib.cancelMktData(qualified[0])
+
+            return result if result else None
+
+        except Exception as e:
+            logger.warning(f"Failed to get Greeks for {symbol} {strike} {expiration}: {e}")
+            return None
+
     def __enter__(self) -> "IBKRClient":
         """Context manager entry."""
         self.connect()
