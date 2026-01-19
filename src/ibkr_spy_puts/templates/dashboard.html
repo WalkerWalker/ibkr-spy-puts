@@ -561,6 +561,7 @@
                         <th>Contract</th>
                         <th>Qty</th>
                         <th>Price</th>
+                        <th>Comm</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -575,11 +576,12 @@
                         <td>{{ trade.symbol }} {{ trade.strike|int }}P {{ trade.expiration.strftime('%m/%d') if trade.expiration else '' }}</td>
                         <td>{{ trade.quantity }}</td>
                         <td>${{ '%.2f'|format(trade.price|float) }}</td>
+                        <td style="color: #888;">${{ '%.2f'|format(trade.commission|float) if trade.commission else '-' }}</td>
                     </tr>
                     {% endfor %}
                     {% if not trade_history %}
                     <tr>
-                        <td colspan="5" style="text-align: center; color: #666;">No trades yet</td>
+                        <td colspan="6" style="text-align: center; color: #666;">No trades yet</td>
                     </tr>
                     {% endif %}
                 </tbody>

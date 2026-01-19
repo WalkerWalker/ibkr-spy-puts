@@ -171,6 +171,7 @@ class Database:
                     action,
                     price,
                     fill_time,
+                    commission,
                     strategy_id
                 FROM trades
                 ORDER BY fill_time DESC
