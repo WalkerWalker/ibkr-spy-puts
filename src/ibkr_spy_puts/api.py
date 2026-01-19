@@ -407,6 +407,87 @@ async def api_live_orders():
     return {"orders": result["live_orders"], "connected": result["connection"]["connected"]}
 
 
+@app.get("/api/executions")
+async def api_executions():
+    """Get recent executions with commission data from IBKR.
+
+    Returns fills from the current session including commission info.
+    """
+    import asyncio
+    import subprocess
+    import json
+
+    from ibkr_spy_puts.config import TWSSettings
+    tws_settings = TWSSettings()
+
+    script = f'''
+import json
+import asyncio
+asyncio.set_event_loop(asyncio.new_event_loop())
+from ib_insync import IB
+from datetime import datetime, timedelta
+
+ib = IB()
+result = {{"executions": [], "connected": False, "error": None}}
+
+try:
+    ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=99, readonly=True, timeout=15)
+    result["connected"] = True
+
+    # Request executions from the last 7 days
+    ib.reqExecutions()
+    ib.sleep(2)
+
+    for fill in ib.fills():
+        c = fill.contract
+        e = fill.execution
+        cr = fill.commissionReport
+
+        if c.secType == "OPT" and c.symbol == "SPY":
+            exec_data = {{
+                "symbol": c.symbol,
+                "strike": c.strike,
+                "expiration": c.lastTradeDateOrContractMonth,
+                "right": c.right,
+                "action": e.side,  # BOT or SLD
+                "quantity": int(e.shares),
+                "price": e.price,
+                "exec_time": e.time.isoformat() if e.time else None,
+                "exec_id": e.execId,
+                "order_id": e.orderId,
+                "commission": None,
+                "realized_pnl": None,
+            }}
+
+            if cr:
+                exec_data["commission"] = cr.commission
+                exec_data["realized_pnl"] = cr.realizedPNL if cr.realizedPNL else None
+
+            result["executions"].append(exec_data)
+
+    ib.disconnect()
+except Exception as e:
+    result["error"] = str(e)
+
+print(json.dumps(result))
+'''
+
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            ["python", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return json.loads(proc.stdout.strip())
+        else:
+            return {"executions": [], "connected": False, "error": proc.stderr}
+    except Exception as e:
+        return {"executions": [], "connected": False, "error": str(e)}
+
+
 # =============================================================================
 # Dashboard Pages
 # =============================================================================
