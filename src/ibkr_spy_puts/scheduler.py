@@ -258,8 +258,8 @@ def create_trade_function(
     def trade():
         import asyncio
         from decimal import Decimal
-        from ibkr_spy_puts.config import BracketSettings, DatabaseSettings, StrategySettings, TWSSettings
-        from ibkr_spy_puts.database import Database, Order, Trade
+        from ibkr_spy_puts.config import BracketSettings, DatabaseSettings, TWSSettings
+        from ibkr_spy_puts.database import Database, Position, Trade
         from ibkr_spy_puts.strategy import PutSellingStrategy
 
         # ib_insync requires an event loop - create one for this thread
@@ -315,7 +315,6 @@ def create_trade_function(
 
                 # Recalculate TP/SL based on actual entry price
                 from ibkr_spy_puts.strategy import BracketPrices
-                from ibkr_spy_puts.config import BracketSettings
                 bracket_settings = BracketSettings()
                 actual_bracket = BracketPrices.calculate(
                     sell_price=entry_price,
@@ -323,9 +322,23 @@ def create_trade_function(
                     stop_loss_pct=bracket_settings.stop_loss_pct,
                 )
 
-                # Create trade record
+                # Log to trades table (execution history)
                 db_trade = Trade(
                     trade_date=date.today(),
+                    symbol=trade_order.option.symbol,
+                    strike=Decimal(str(trade_order.option.strike)),
+                    expiration=trade_order.option.expiration,
+                    quantity=trade_order.quantity,
+                    action="SELL",
+                    price=Decimal(str(entry_price)),
+                    fill_time=datetime.now(),
+                    strategy_id="spy-put-selling",
+                )
+                trade_id = db.insert_trade(db_trade)
+                logger.info(f"Logged trade execution: ID={trade_id}")
+
+                # Create position record (the book)
+                position = Position(
                     symbol=trade_order.option.symbol,
                     strike=Decimal(str(trade_order.option.strike)),
                     expiration=trade_order.option.expiration,
@@ -337,57 +350,14 @@ def create_trade_function(
                     status="OPEN",
                     strategy_id="spy-put-selling",
                 )
-                trade_id = db.insert_trade(db_trade)
-                logger.info(f"Created trade record: ID={trade_id}")
+                position_id = db.insert_position(position)
+                logger.info(f"Created position: ID={position_id}")
 
-                # Record parent order
-                if result.parent_order_id:
-                    parent_status = "FILLED" if result.fill_price else "SUBMITTED"
-                    parent_order = Order(
-                        trade_id=trade_id,
-                        ibkr_order_id=result.parent_order_id,
-                        order_type="PARENT",
-                        action="SELL",
-                        order_class="LMT",
-                        limit_price=Decimal(str(trade_order.limit_price)),
-                        fill_price=Decimal(str(entry_price)) if parent_status == "FILLED" else None,
-                        quantity=trade_order.quantity,
-                        status=parent_status,
-                        algo_strategy="Adaptive",
-                        algo_priority="Normal",
-                    )
-                    db.insert_order(parent_order)
-                    logger.info(f"Recorded parent order: {result.parent_order_id} ({parent_status})")
-
-                # Record take profit order
+                # Orders are live in IBKR - not persisted to database
                 if result.take_profit_order_id:
-                    tp_order = Order(
-                        trade_id=trade_id,
-                        ibkr_order_id=result.take_profit_order_id,
-                        order_type="TAKE_PROFIT",
-                        action="BUY",
-                        order_class="LMT",
-                        limit_price=Decimal(str(actual_bracket.take_profit_price)),
-                        quantity=trade_order.quantity,
-                        status="SUBMITTED",
-                    )
-                    db.insert_order(tp_order)
-                    logger.info(f"Recorded take profit order: {result.take_profit_order_id}")
-
-                # Record stop loss order
+                    logger.info(f"Take profit order placed: {result.take_profit_order_id}")
                 if result.stop_loss_order_id:
-                    sl_order = Order(
-                        trade_id=trade_id,
-                        ibkr_order_id=result.stop_loss_order_id,
-                        order_type="STOP_LOSS",
-                        action="BUY",
-                        order_class="STP",
-                        stop_price=Decimal(str(actual_bracket.stop_loss_price)),
-                        quantity=trade_order.quantity,
-                        status="PRESUBMITTED",
-                    )
-                    db.insert_order(sl_order)
-                    logger.info(f"Recorded stop loss order: {result.stop_loss_order_id}")
+                    logger.info(f"Stop loss order placed: {result.stop_loss_order_id}")
 
                 logger.info("Trade recorded to database successfully!")
 

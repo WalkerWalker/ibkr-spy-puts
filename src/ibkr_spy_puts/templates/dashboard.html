@@ -373,22 +373,12 @@
                 <span class="metric-value neutral">{{ summary.open_positions or 0 }}</span>
             </div>
             <div class="metric">
-                <span class="metric-label">Closed Trades</span>
-                <span class="metric-value">{{ summary.closed_trades or 0 }}</span>
+                <span class="metric-label">Closed Positions</span>
+                <span class="metric-value">{{ summary.closed_positions or 0 }}</span>
             </div>
             <div class="metric">
-                <span class="metric-label">Win Rate</span>
-                <span class="metric-value {% if (summary.win_rate_pct or 0) >= 50 %}positive{% else %}negative{% endif %}">
-                    {{ summary.win_rate_pct or 0 }}%
-                </span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Take Profits</span>
-                <span class="metric-value positive">{{ summary.take_profit_count or 0 }}</span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Stop Losses</span>
-                <span class="metric-value negative">{{ summary.stop_loss_count or 0 }}</span>
+                <span class="metric-label">Open Premium</span>
+                <span class="metric-value positive">${{ "%.2f"|format(summary.open_premium or 0) }}</span>
             </div>
         </div>
 
@@ -396,23 +386,13 @@
             <h2>P&L</h2>
             <div class="metric">
                 <span class="metric-label">Realized P&L</span>
-                <span class="metric-value {% if (summary.total_realized_pnl or 0) >= 0 %}positive{% else %}negative{% endif %}">
-                    ${{ "%.2f"|format(summary.total_realized_pnl or 0) }}
+                <span class="metric-value {% if (summary.realized_pnl or 0) >= 0 %}positive{% else %}negative{% endif %}">
+                    ${{ "%.2f"|format(summary.realized_pnl or 0) }}
                 </span>
             </div>
             <div class="metric">
                 <span class="metric-label">Unrealized P&L</span>
-                <span id="unrealized-pnl" class="metric-value {% if (risk.total_unrealized_pnl or 0) >= 0 %}positive{% else %}negative{% endif %}">
-                    ${{ "%.2f"|format(risk.total_unrealized_pnl or 0) }}
-                </span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Max Profit (if all TP)</span>
-                <span class="metric-value positive">${{ "%.2f"|format(risk.max_profit or 0) }}</span>
-            </div>
-            <div class="metric">
-                <span class="metric-label">Max Loss (if all SL)</span>
-                <span class="metric-value negative">${{ "%.2f"|format(risk.max_loss or 0) }}</span>
+                <span id="unrealized-pnl" class="metric-value neutral">--</span>
             </div>
         </div>
 
@@ -446,28 +426,45 @@
                 {% set _ = ibkr_keys.append(key) %}
             {% endfor %}
 
+            {# Build lookup for live orders by strike/exp/type #}
+            {% set tp_orders = {} %}
+            {% set sl_orders = {} %}
+            {% for order in live_orders %}
+                {% if order.action == 'BUY' and order.strike %}
+                    {% set order_key = (order.strike|int|string) ~ '_' ~ order.expiration %}
+                    {% if order.order_type == 'LMT' %}
+                        {% set _ = tp_orders.update({order_key: order}) %}
+                    {% elif order.order_type == 'STP' %}
+                        {% set _ = sl_orders.update({order_key: order}) %}
+                    {% endif %}
+                {% endif %}
+            {% endfor %}
+
             <table id="positions-table">
                 <thead>
                     <tr>
                         <th></th>
                         <th>Contract</th>
-                        <th>DIT</th>
                         <th>DTE</th>
                         <th>Entry</th>
                         <th>P&L %</th>
                         <th>TP</th>
                         <th>SL</th>
-                        <th>Status</th>
+                        <th>Position</th>
+                        <th>Orders</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for pos in positions %}
                     {% set pos_key = pos.symbol ~ '_' ~ (pos.strike|int) ~ '_' ~ (pos.expiration|string|replace('-', '')) %}
                     {% set is_verified = pos_key in ibkr_keys %}
+                    {% set order_key = (pos.strike|int|string) ~ '_' ~ (pos.expiration|string|replace('-', '')) %}
+                    {% set has_tp = order_key in tp_orders %}
+                    {% set has_sl = order_key in sl_orders %}
+                    {% set orders_ok = has_tp and has_sl %}
                     <tr class="position-row" data-position-id="{{ pos.id }}" onclick="togglePositionOrders({{ pos.id }})">
                         <td class="expand-cell"><span class="expand-icon">&#9654;</span></td>
                         <td class="symbol-cell">{{ pos.symbol }} {{ pos.strike|int }}P {{ pos.expiration.strftime('%m/%d') if pos.expiration else '' }}</td>
-                        <td>{{ pos.days_in_trade or 0 }}</td>
                         <td>{{ pos.days_to_expiry }}</td>
                         <td>${{ "%.2f"|format(pos.entry_price) }}</td>
                         <td class="pnl">--</td>
@@ -480,33 +477,55 @@
                                 <span class="status unverified">DB Only</span>
                             {% endif %}
                         </td>
+                        <td>
+                            {% if connection.ready_to_trade %}
+                                {% if orders_ok %}
+                                    <span class="status verified">TP+SL</span>
+                                {% elif has_tp %}
+                                    <span class="status unverified">TP only</span>
+                                {% elif has_sl %}
+                                    <span class="status unverified">SL only</span>
+                                {% else %}
+                                    <span class="status" style="background: #400f0f; color: #ff6666;">Missing</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="status" style="background: #333; color: #888;">--</span>
+                            {% endif %}
+                        </td>
                     </tr>
-                    {# Orders row (hidden by default) #}
+                    {# Expandable orders row #}
                     <tr class="orders-row" id="orders-{{ pos.id }}" style="display: none;">
                         <td></td>
                         <td colspan="8" class="orders-cell">
                             <table class="orders-table">
                                 <tr>
                                     <th>Type</th>
-                                    <th>Price</th>
+                                    <th>Expected</th>
+                                    <th>Live Price</th>
                                     <th>Status</th>
                                 </tr>
-                                {% for order in pos.orders %}
                                 <tr>
-                                    <td>{% if order.order_type == 'TAKE_PROFIT' %}LMT{% elif order.order_type == 'STOP_LOSS' %}STP{% else %}{{ order.order_type }}{% endif %}</td>
-                                    <td>
-                                        {% if order.limit_price %}
-                                            ${{ "%.2f"|format(order.limit_price) }}
-                                        {% elif order.stop_price %}
-                                            ${{ "%.2f"|format(order.stop_price) }}
-                                        {% endif %}
-                                    </td>
-                                    <td>{{ order.status }}</td>
+                                    <td>Take Profit (LMT)</td>
+                                    <td class="positive">${{ "%.2f"|format(pos.expected_tp_price) }}</td>
+                                    {% if has_tp %}
+                                        <td class="positive">${{ "%.2f"|format(tp_orders[order_key].limit_price) }}</td>
+                                        <td><span class="status verified">{{ tp_orders[order_key].status }}</span></td>
+                                    {% else %}
+                                        <td>--</td>
+                                        <td><span class="status" style="background: #400f0f; color: #ff6666;">Not Found</span></td>
+                                    {% endif %}
                                 </tr>
-                                {% endfor %}
-                                {% if not pos.orders %}
-                                <tr><td colspan="3" style="color: #666;">No orders</td></tr>
-                                {% endif %}
+                                <tr>
+                                    <td>Stop Loss (STP)</td>
+                                    <td class="negative">${{ "%.2f"|format(pos.expected_sl_price) }}</td>
+                                    {% if has_sl %}
+                                        <td class="negative">${{ "%.2f"|format(sl_orders[order_key].stop_price) }}</td>
+                                        <td><span class="status verified">{{ sl_orders[order_key].status }}</span></td>
+                                    {% else %}
+                                        <td>--</td>
+                                        <td><span class="status" style="background: #400f0f; color: #ff6666;">Not Found</span></td>
+                                    {% endif %}
+                                </tr>
                             </table>
                         </td>
                     </tr>
@@ -547,14 +566,14 @@
                 <tbody>
                     {% for trade in trade_history %}
                     <tr>
-                        <td>{{ trade.time.strftime('%Y-%m-%d %H:%M') if trade.time else '-' }}</td>
+                        <td>{{ trade.fill_time.strftime('%Y-%m-%d %H:%M') if trade.fill_time else '-' }}</td>
                         <td>
                             <span class="status {% if trade.action == 'SELL' %}open{% else %}verified{% endif %}">
                                 {{ trade.action }}
                             </span>
                         </td>
                         <td>{{ trade.symbol }} {{ trade.strike|int }}P {{ trade.expiration.strftime('%m/%d') if trade.expiration else '' }}</td>
-                        <td>{{ trade.qty }}</td>
+                        <td>{{ trade.quantity }}</td>
                         <td>${{ '%.2f'|format(trade.price|float) }}</td>
                     </tr>
                     {% endfor %}

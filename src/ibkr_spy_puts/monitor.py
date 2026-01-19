@@ -1,12 +1,15 @@
-"""Order monitoring service for tracking bracket order fills.
+"""Position monitoring service for detecting closed positions.
 
 This module provides:
-1. Polling-based order status monitoring
-2. Database synchronization when orders fill
-3. Position snapshot updates with live greeks
+1. Detection of closed positions (TP/SL fills in IBKR)
+2. Database synchronization when positions close
+
+Since orders are live data from IBKR (not persisted), this monitor:
+- Compares open positions in database with IBKR positions
+- When a database position is no longer in IBKR, marks it as closed
 
 Usage:
-    # Run once to sync orders
+    # Run once to sync positions
     poetry run python -m ibkr_spy_puts.monitor --once
 
     # Run continuously (every 5 minutes during market hours)
@@ -15,23 +18,23 @@ Usage:
 
 import argparse
 import time
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 
 from ibkr_spy_puts.config import DatabaseSettings, TWSSettings
-from ibkr_spy_puts.database import Database, Order, PositionSnapshot, Trade
+from ibkr_spy_puts.database import Database, Position, Trade
 from ibkr_spy_puts.ibkr_client import IBKRClient
 
 
-class OrderMonitor:
-    """Monitors IBKR orders and syncs with database."""
+class PositionMonitor:
+    """Monitors IBKR positions and syncs with database."""
 
     def __init__(
         self,
         tws_settings: TWSSettings | None = None,
         db_settings: DatabaseSettings | None = None,
     ):
-        """Initialize order monitor.
+        """Initialize position monitor.
 
         Args:
             tws_settings: TWS connection settings.
@@ -74,8 +77,11 @@ class OrderMonitor:
             self.db.disconnect()
             print("Disconnected from database")
 
-    def sync_orders(self) -> dict:
-        """Sync order status from IBKR to database.
+    def sync_positions(self) -> dict:
+        """Sync position status between IBKR and database.
+
+        Detects positions that have been closed (no longer in IBKR)
+        and updates the database accordingly.
 
         Returns:
             Dict with sync statistics.
@@ -84,188 +90,123 @@ class OrderMonitor:
             raise RuntimeError("Not connected")
 
         stats = {
-            "orders_checked": 0,
-            "orders_updated": 0,
-            "trades_closed": 0,
+            "db_positions": 0,
+            "ibkr_positions": 0,
+            "positions_closed": 0,
             "errors": 0,
         }
 
-        # Get all trades (order status + execution info)
-        ibkr_trades = self.client.ib.trades()
-        print(f"Found {len(ibkr_trades)} trades in IBKR")
+        # Get open positions from database
+        db_positions = self.db.get_open_positions()
+        stats["db_positions"] = len(db_positions)
+        print(f"Found {len(db_positions)} open positions in database")
 
-        # Get pending orders from database
-        pending_orders = self.db.get_pending_orders()
-        print(f"Found {len(pending_orders)} pending orders in database")
+        # Get positions from IBKR
+        ibkr_positions = self.client.ib.positions()
+        ibkr_option_positions = [
+            p for p in ibkr_positions if p.contract.secType == "OPT"
+        ]
+        stats["ibkr_positions"] = len(ibkr_option_positions)
+        print(f"Found {len(ibkr_option_positions)} option positions in IBKR")
 
-        # Create lookup by IBKR order ID
-        db_orders_by_ibkr_id = {
-            o["ibkr_order_id"]: o for o in pending_orders if o.get("ibkr_order_id")
-        }
+        # Build lookup of IBKR positions by (symbol, strike, expiration)
+        ibkr_lookup = {}
+        for pos in ibkr_option_positions:
+            c = pos.contract
+            # Key: symbol_strike_expiration
+            key = (c.symbol, int(c.strike), c.lastTradeDateOrContractMonth)
+            ibkr_lookup[key] = pos
 
-        # Check each IBKR trade against database
-        for trade in ibkr_trades:
-            stats["orders_checked"] += 1
-            order_id = trade.order.orderId
-            perm_id = trade.order.permId
-            status = trade.orderStatus.status
+        # Check each database position
+        for db_pos in db_positions:
+            # Build key for lookup
+            exp_str = db_pos.expiration.strftime("%Y%m%d")
+            key = (db_pos.symbol, int(db_pos.strike), exp_str)
 
-            # Find matching database order
-            db_order = db_orders_by_ibkr_id.get(order_id)
-            if not db_order:
-                continue  # Order not from our strategy
-
-            # Check if status changed
-            if status == "Filled" and db_order["status"] != "FILLED":
+            if key not in ibkr_lookup:
+                # Position is no longer in IBKR - it was closed
                 try:
-                    self._handle_fill(trade, db_order)
-                    stats["orders_updated"] += 1
-
-                    # If this was a bracket order fill, close the trade
-                    if db_order["order_type"] in ("TAKE_PROFIT", "STOP_LOSS"):
-                        self._close_trade(trade, db_order)
-                        stats["trades_closed"] += 1
-
+                    self._handle_closed_position(db_pos)
+                    stats["positions_closed"] += 1
                 except Exception as e:
-                    print(f"ERROR updating order {order_id}: {e}")
-                    stats["errors"] += 1
-
-            elif status in ("Cancelled", "Inactive") and db_order["status"] not in (
-                "CANCELLED",
-                "INACTIVE",
-            ):
-                try:
-                    self.db.update_order_status(
-                        db_order["id"], status.upper()
-                    )
-                    stats["orders_updated"] += 1
-                except Exception as e:
-                    print(f"ERROR updating order {order_id}: {e}")
+                    print(f"ERROR closing position {db_pos.id}: {e}")
                     stats["errors"] += 1
 
         return stats
 
-    def _handle_fill(self, trade, db_order: dict):
-        """Handle an order fill.
+    def _handle_closed_position(self, db_pos: Position):
+        """Handle a position that is no longer in IBKR.
 
         Args:
-            trade: IBKR trade object.
-            db_order: Database order record.
+            db_pos: Database position that was closed.
         """
-        fill_price = Decimal(str(trade.orderStatus.avgFillPrice))
-        fill_time = datetime.now()  # IBKR doesn't always provide exact fill time
+        print(f"Position closed: {db_pos.symbol} {db_pos.strike}P {db_pos.expiration}")
 
-        # Try to get actual fill time from executions
-        if trade.fills:
-            fill_time = trade.fills[-1].time
+        # We don't know the exact exit price without checking fills
+        # For now, mark as closed with a placeholder
+        # In production, you might want to fetch the fill details from IBKR executions
 
-        print(
-            f"Order {db_order['ibkr_order_id']} ({db_order['order_type']}) "
-            f"filled at ${fill_price}"
-        )
+        # Try to get the exit price from recent fills
+        exit_price = None
+        exit_time = datetime.now()
 
-        self.db.update_order_fill(
-            order_id=db_order["id"],
-            fill_price=fill_price,
-            fill_time=fill_time,
-            filled_quantity=trade.orderStatus.filled,
-        )
+        # Check recent fills for this contract
+        for fill in self.client.ib.fills():
+            c = fill.contract
+            if (
+                c.secType == "OPT"
+                and c.symbol == db_pos.symbol
+                and int(c.strike) == int(db_pos.strike)
+            ):
+                exp_str = c.lastTradeDateOrContractMonth
+                if exp_str == db_pos.expiration.strftime("%Y%m%d"):
+                    # Found a fill for this contract
+                    exit_price = Decimal(str(fill.execution.avgPrice))
+                    exit_time = fill.execution.time
+                    break
 
-    def _close_trade(self, trade, db_order: dict):
-        """Close a trade when bracket order fills.
+        if exit_price:
+            # Also log to trades table
+            trade = Trade(
+                trade_date=exit_time.date(),
+                symbol=db_pos.symbol,
+                strike=db_pos.strike,
+                expiration=db_pos.expiration,
+                quantity=db_pos.quantity,
+                action="BUY",  # Closing a short put
+                price=exit_price,
+                fill_time=exit_time,
+            )
+            self.db.insert_trade(trade)
+            print(f"  Exit price: ${exit_price}")
 
-        Args:
-            trade: IBKR trade object.
-            db_order: Database order record.
-        """
-        fill_price = Decimal(str(trade.orderStatus.avgFillPrice))
-        fill_time = datetime.now()
-
-        if trade.fills:
-            fill_time = trade.fills[-1].time
-
-        exit_reason = db_order["order_type"]  # TAKE_PROFIT or STOP_LOSS
-
-        print(
-            f"Closing trade {db_order['trade_id']} - {exit_reason} at ${fill_price}"
-        )
-
-        # Update the trade with exit details
-        self.db.update_trade_exit(
-            trade_id=db_order["trade_id"],
-            exit_price=fill_price,
-            exit_time=fill_time,
-            exit_reason=exit_reason,
-        )
-        print(f"Updated trade {db_order['trade_id']}: exit at ${fill_price} ({exit_reason})")
-
-        # Cancel the other bracket order in database
-        # (IBKR OCO handles the actual cancellation)
-        orders = self.db.get_orders_for_trade(db_order["trade_id"])
-        for order in orders:
-            if order.order_type != db_order["order_type"] and order.order_type != "PARENT":
-                if order.status not in ("FILLED", "CANCELLED"):
-                    self.db.update_order_status(order.id, "CANCELLED")
-                    print(f"Marked {order.order_type} order as CANCELLED (OCO)")
-
-    def update_position_snapshots(self) -> int:
-        """Update position snapshots with current greeks.
-
-        Returns:
-            Number of positions updated.
-        """
-        if not self.client or not self.db:
-            raise RuntimeError("Not connected")
-
-        open_trades = self.db.get_open_trades()
-        print(f"Updating snapshots for {len(open_trades)} open positions")
-
-        updated = 0
-        spy_price = self.client.get_spy_price()
-
-        for trade in open_trades:
-            try:
-                # Get current option data
-                # This requires qualifying the contract and getting greeks
-                # For now, we'll create a basic snapshot
-                snapshot = PositionSnapshot(
-                    trade_id=trade.id,
-                    snapshot_time=datetime.now(),
-                    underlying_price=Decimal(str(spy_price)) if spy_price else None,
-                    days_to_expiry=(trade.expiration - date.today()).days,
-                )
-
-                # Calculate unrealized P&L if we had current price
-                # For now, just store the snapshot
-                self.db.insert_snapshot(snapshot)
-                updated += 1
-
-            except Exception as e:
-                print(f"ERROR updating snapshot for trade {trade.id}: {e}")
-
-        return updated
+            # Close the position
+            self.db.close_position(db_pos.id, exit_price, exit_time)
+        else:
+            # No fill found - maybe expired worthless
+            # Mark as closed without exit price
+            print("  Exit price unknown (possibly expired worthless)")
+            self.db.close_position(
+                db_pos.id, Decimal("0"), exit_time
+            )
 
     def run_once(self):
         """Run a single sync cycle."""
         print("=" * 60)
-        print(f"Order Monitor - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Position Monitor - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 60)
 
         if not self.connect():
             return
 
         try:
-            # Sync order status
-            stats = self.sync_orders()
+            # Sync positions
+            stats = self.sync_positions()
             print(f"\nSync complete:")
-            print(f"  Orders checked: {stats['orders_checked']}")
-            print(f"  Orders updated: {stats['orders_updated']}")
-            print(f"  Trades closed: {stats['trades_closed']}")
+            print(f"  DB positions: {stats['db_positions']}")
+            print(f"  IBKR positions: {stats['ibkr_positions']}")
+            print(f"  Positions closed: {stats['positions_closed']}")
             print(f"  Errors: {stats['errors']}")
-
-            # Update position snapshots
-            updated = self.update_position_snapshots()
-            print(f"  Snapshots updated: {updated}")
 
         finally:
             self.disconnect()
@@ -295,7 +236,7 @@ class OrderMonitor:
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="Order monitoring service")
+    parser = argparse.ArgumentParser(description="Position monitoring service")
     parser.add_argument(
         "--port", type=int, default=7496, help="TWS port (7496=live, 7497=paper)"
     )
@@ -312,7 +253,7 @@ def main():
     args = parser.parse_args()
 
     tws_settings = TWSSettings(port=args.port)
-    monitor = OrderMonitor(tws_settings=tws_settings)
+    monitor = PositionMonitor(tws_settings=tws_settings)
 
     if args.once:
         monitor.run_once()

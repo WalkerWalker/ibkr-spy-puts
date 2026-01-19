@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from ibkr_spy_puts.config import DatabaseSettings
-from ibkr_spy_puts.database import Database, Order, PositionSnapshot, Trade
+from ibkr_spy_puts.database import Database, Position, Trade
 
 
 @pytest.fixture
@@ -52,12 +52,51 @@ class TestDatabaseConnection:
 
 
 class TestTradeOperations:
-    """Test trade CRUD operations."""
+    """Test trade log operations."""
 
-    def test_insert_and_get_trade(self, db):
-        """Test inserting and retrieving a trade."""
+    def test_insert_trade(self, db):
+        """Test inserting a trade log entry."""
         trade = Trade(
             trade_date=date.today(),
+            symbol="SPY",
+            strike=Decimal("630.00"),
+            expiration=date(2026, 4, 17),
+            quantity=1,
+            action="SELL",
+            price=Decimal("5.59"),
+            fill_time=datetime.now(),
+            strategy_id="spy-put-selling",
+        )
+
+        trade_id = db.insert_trade(trade)
+        assert trade_id > 0
+
+    def test_get_trade_history(self, db):
+        """Test getting trade history."""
+        # Insert a test trade
+        trade = Trade(
+            trade_date=date.today(),
+            symbol="SPY",
+            strike=Decimal("625.00"),
+            expiration=date(2026, 4, 17),
+            quantity=1,
+            action="SELL",
+            price=Decimal("5.00"),
+            fill_time=datetime.now(),
+        )
+        db.insert_trade(trade)
+
+        history = db.get_trade_history()
+        assert len(history) > 0
+        assert history[0]["action"] in ("SELL", "BUY")
+
+
+class TestPositionOperations:
+    """Test position (book) operations."""
+
+    def test_insert_and_get_position(self, db):
+        """Test inserting and retrieving a position."""
+        position = Position(
             symbol="SPY",
             strike=Decimal("630.00"),
             expiration=date(2026, 4, 17),
@@ -70,20 +109,19 @@ class TestTradeOperations:
             strategy_id="spy-put-selling",
         )
 
-        trade_id = db.insert_trade(trade)
-        assert trade_id > 0
+        position_id = db.insert_position(position)
+        assert position_id > 0
 
-        retrieved = db.get_trade(trade_id)
+        retrieved = db.get_position(position_id)
         assert retrieved is not None
         assert retrieved.symbol == "SPY"
         assert retrieved.strike == Decimal("630.00")
         assert retrieved.status == "OPEN"
 
-    def test_get_open_trades(self, db):
-        """Test getting open trades."""
-        # Insert a test trade
-        trade = Trade(
-            trade_date=date.today(),
+    def test_get_open_positions(self, db):
+        """Test getting open positions."""
+        # Insert a test position
+        position = Position(
             symbol="SPY",
             strike=Decimal("625.00"),
             expiration=date(2026, 4, 17),
@@ -94,17 +132,16 @@ class TestTradeOperations:
             expected_sl_price=Decimal("15.00"),
             status="OPEN",
         )
-        db.insert_trade(trade)
+        db.insert_position(position)
 
-        open_trades = db.get_open_trades()
-        assert len(open_trades) > 0
-        assert all(t.status == "OPEN" for t in open_trades)
+        open_positions = db.get_open_positions()
+        assert len(open_positions) > 0
+        assert all(p.status == "OPEN" for p in open_positions)
 
-    def test_update_trade_exit(self, db):
-        """Test closing a trade."""
-        # Insert a trade
-        trade = Trade(
-            trade_date=date.today(),
+    def test_close_position(self, db):
+        """Test closing a position."""
+        # Insert a position
+        position = Position(
             symbol="SPY",
             strike=Decimal("620.00"),
             expiration=date(2026, 4, 17),
@@ -115,111 +152,57 @@ class TestTradeOperations:
             expected_sl_price=Decimal("13.50"),
             status="OPEN",
         )
-        trade_id = db.insert_trade(trade)
+        position_id = db.insert_position(position)
 
-        # Close the trade
+        # Close the position
         exit_time = datetime.now()
-        db.update_trade_exit(
-            trade_id=trade_id,
+        db.close_position(
+            position_id=position_id,
             exit_price=Decimal("1.80"),
             exit_time=exit_time,
-            exit_reason="TAKE_PROFIT",
         )
 
         # Verify it's closed
-        closed_trade = db.get_trade(trade_id)
-        assert closed_trade.status == "CLOSED"
-        assert closed_trade.exit_reason == "TAKE_PROFIT"
-        # P&L should be calculated by trigger: (4.50 - 1.80) * 1 * 100 = $270
-        assert closed_trade.realized_pnl == Decimal("270.00")
+        closed_position = db.get_position(position_id)
+        assert closed_position.status == "CLOSED"
+        assert closed_position.exit_price == Decimal("1.80")
 
-
-class TestOrderOperations:
-    """Test order CRUD operations."""
-
-    def test_insert_and_get_orders(self, db):
-        """Test inserting and retrieving orders."""
-        # First create a trade
-        trade = Trade(
-            trade_date=date.today(),
+    def test_get_position_by_contract(self, db):
+        """Test finding position by contract details."""
+        # Insert a position
+        position = Position(
             symbol="SPY",
             strike=Decimal("615.00"),
-            expiration=date(2026, 4, 17),
+            expiration=date(2026, 5, 15),
             quantity=1,
             entry_price=Decimal("4.00"),
             entry_time=datetime.now(),
             expected_tp_price=Decimal("1.60"),
             expected_sl_price=Decimal("12.00"),
+            status="OPEN",
         )
-        trade_id = db.insert_trade(trade)
+        db.insert_position(position)
 
-        # Insert parent order
-        parent = Order(
-            trade_id=trade_id,
-            ibkr_order_id=12345,
-            ibkr_perm_id=98765,
-            order_type="PARENT",
-            action="SELL",
-            limit_price=Decimal("4.00"),
-            quantity=1,
-            status="FILLED",
-            algo_strategy="Adaptive",
-            algo_priority="Normal",
-        )
-        parent_id = db.insert_order(parent)
-        assert parent_id > 0
-
-        # Insert take profit order
-        tp = Order(
-            trade_id=trade_id,
-            ibkr_order_id=12346,
-            order_type="TAKE_PROFIT",
-            action="BUY",
-            limit_price=Decimal("1.60"),
-            quantity=1,
-            status="SUBMITTED",
-        )
-        tp_id = db.insert_order(tp)
-        assert tp_id > 0
-
-        # Insert stop loss order
-        sl = Order(
-            trade_id=trade_id,
-            ibkr_order_id=12347,
-            order_type="STOP_LOSS",
-            action="BUY",
-            order_class="STP",
-            stop_price=Decimal("12.00"),
-            quantity=1,
-            status="SUBMITTED",
-        )
-        sl_id = db.insert_order(sl)
-        assert sl_id > 0
-
-        # Get all orders for trade
-        orders = db.get_orders_for_trade(trade_id)
-        assert len(orders) == 3
-        assert orders[0].order_type == "PARENT"
+        # Find it by contract
+        found = db.get_position_by_contract("SPY", Decimal("615.00"), date(2026, 5, 15))
+        assert found is not None
+        assert found.strike == Decimal("615.00")
 
 
-class TestViewQueries:
-    """Test view-based queries for frontend."""
+class TestSummaryViews:
+    """Test summary queries."""
 
     def test_get_strategy_summary(self, db):
         """Test getting strategy summary."""
         summary = db.get_strategy_summary()
         assert "open_positions" in summary
-        assert "closed_trades" in summary
-        assert "total_realized_pnl" in summary
+        assert "closed_positions" in summary
+        assert "realized_pnl" in summary
 
-    def test_get_risk_metrics(self, db):
-        """Test getting risk metrics."""
-        metrics = db.get_risk_metrics()
-        assert "open_position_count" in metrics
-        assert "max_loss" in metrics
-        assert "total_delta" in metrics
-
-    def test_get_open_positions(self, db):
-        """Test getting open positions view."""
-        positions = db.get_open_positions()
+    def test_get_positions_for_display(self, db):
+        """Test getting positions for dashboard display."""
+        positions = db.get_positions_for_display()
         assert isinstance(positions, list)
+        # Each position should have days_to_expiry calculated
+        if positions:
+            assert "days_to_expiry" in positions[0]
