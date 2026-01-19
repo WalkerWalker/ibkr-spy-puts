@@ -119,6 +119,7 @@ class TradingScheduler:
         trade_func: Callable[[], None],
         settings: ScheduleSettings | None = None,
         force_run: bool = False,
+        snapshot_func: Callable[[], None] | None = None,
     ):
         """Initialize the scheduler.
 
@@ -126,8 +127,10 @@ class TradingScheduler:
             trade_func: Function to call when it's time to trade.
             settings: Schedule settings.
             force_run: If True, bypass trading day check (for testing on weekends).
+            snapshot_func: Function to call at market close for daily snapshot.
         """
         self.trade_func = trade_func
+        self.snapshot_func = snapshot_func
         self.settings = settings or ScheduleSettings()
         self.force_run = force_run
         self.calendar = MarketCalendar()
@@ -162,6 +165,28 @@ class TradingScheduler:
         except Exception as e:
             logger.error(f"Trade execution failed: {e}", exc_info=True)
 
+    def _execute_snapshot(self):
+        """Execute the daily snapshot if today is a trading day."""
+        today = date.today()
+
+        if not self.calendar.is_trading_day(today):
+            if self.force_run:
+                logger.warning(f"Force running snapshot on non-trading day: {today}")
+            else:
+                logger.info(f"Skipping snapshot - {today} is not a trading day")
+                return
+
+        if not self.snapshot_func:
+            logger.warning("Snapshot function not configured")
+            return
+
+        logger.info(f"Executing daily snapshot for {today}")
+        try:
+            self.snapshot_func()
+            logger.info("Daily snapshot completed")
+        except Exception as e:
+            logger.error(f"Snapshot capture failed: {e}", exc_info=True)
+
     def _parse_trade_time(self) -> tuple[int, int]:
         """Parse trade time from settings.
 
@@ -193,6 +218,23 @@ class TradingScheduler:
             name="Daily Put Selling",
             replace_existing=True,
         )
+
+        # Schedule daily snapshot at market close (4:00 PM ET)
+        if self.snapshot_func:
+            snapshot_trigger = CronTrigger(
+                day_of_week=day_of_week,
+                hour=16,
+                minute=5,  # 4:05 PM to ensure market is fully closed
+                timezone=self.settings.timezone,
+            )
+            self.scheduler.add_job(
+                self._execute_snapshot,
+                trigger=snapshot_trigger,
+                id="daily_snapshot",
+                name="Daily Book Snapshot",
+                replace_existing=True,
+            )
+            logger.info(f"Snapshot scheduled: 16:05 {self.settings.timezone}")
 
         next_run = self.get_next_run_time()
         if next_run:
@@ -238,6 +280,11 @@ class TradingScheduler:
         """Run the trade immediately (for testing)."""
         logger.info("Manual trade trigger")
         self._execute_trade()
+
+    def run_snapshot_now(self):
+        """Run the snapshot immediately (for testing)."""
+        logger.info("Manual snapshot trigger")
+        self._execute_snapshot()
 
 
 def create_trade_function(
@@ -522,10 +569,16 @@ def run_scheduler(
         port=port,
     )
 
+    # Create snapshot function (skip for mock mode)
+    snapshot_func = None
+    if not use_mock:
+        snapshot_func = create_snapshot_function(port=port)
+
     scheduler = TradingScheduler(
         trade_func=trade_func,
         settings=schedule_settings,
         force_run=force_run,
+        snapshot_func=snapshot_func,
     )
 
     logger.info("=" * 60)
