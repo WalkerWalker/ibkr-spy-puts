@@ -424,7 +424,7 @@ async def api_executions():
 import json
 import asyncio
 asyncio.set_event_loop(asyncio.new_event_loop())
-from ib_insync import IB
+from ib_insync import IB, ExecutionFilter
 from datetime import datetime, timedelta
 
 ib = IB()
@@ -434,36 +434,39 @@ try:
     ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=99, readonly=True, timeout=15)
     result["connected"] = True
 
-    # Request executions from the last 7 days
-    ib.reqExecutions()
-    ib.sleep(2)
+    # Request executions from the last 7 days using filter
+    # IBKR format: YYYYMMDD-HH:MM:SS
+    week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d-00:00:00")
+    exec_filter = ExecutionFilter(time=week_ago, symbol="SPY", secType="OPT")
 
-    for fill in ib.fills():
+    fills = ib.reqExecutions(exec_filter)
+    ib.sleep(3)
+
+    for fill in fills:
         c = fill.contract
         e = fill.execution
         cr = fill.commissionReport
 
-        if c.secType == "OPT" and c.symbol == "SPY":
-            exec_data = {{
-                "symbol": c.symbol,
-                "strike": c.strike,
-                "expiration": c.lastTradeDateOrContractMonth,
-                "right": c.right,
-                "action": e.side,  # BOT or SLD
-                "quantity": int(e.shares),
-                "price": e.price,
-                "exec_time": e.time.isoformat() if e.time else None,
-                "exec_id": e.execId,
-                "order_id": e.orderId,
-                "commission": None,
-                "realized_pnl": None,
-            }}
+        exec_data = {{
+            "symbol": c.symbol,
+            "strike": c.strike,
+            "expiration": c.lastTradeDateOrContractMonth,
+            "right": c.right,
+            "action": e.side,  # BOT or SLD
+            "quantity": int(e.shares),
+            "price": e.price,
+            "exec_time": e.time.isoformat() if e.time else None,
+            "exec_id": e.execId,
+            "order_id": e.orderId,
+            "commission": None,
+            "realized_pnl": None,
+        }}
 
-            if cr:
-                exec_data["commission"] = cr.commission
-                exec_data["realized_pnl"] = cr.realizedPNL if cr.realizedPNL else None
+        if cr:
+            exec_data["commission"] = cr.commission
+            exec_data["realized_pnl"] = cr.realizedPNL if cr.realizedPNL else None
 
-            result["executions"].append(exec_data)
+        result["executions"].append(exec_data)
 
     ib.disconnect()
 except Exception as e:
