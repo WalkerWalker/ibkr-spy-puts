@@ -105,6 +105,7 @@ async def get_positions_live():
                 pos_copy['gamma'] = live.get('gamma')
                 pos_copy['vega'] = live.get('vega')
                 pos_copy['iv'] = live.get('iv')
+                pos_copy['margin'] = live.get('margin')
 
                 # Calculate P&L
                 if live.get('mid') and pos['entry_price']:
@@ -155,7 +156,7 @@ def _fetch_live_position_data(positions: list) -> dict:
 import json
 import asyncio
 asyncio.set_event_loop(asyncio.new_event_loop())
-from ib_insync import IB, Option
+from ib_insync import IB, Option, MarketOrder
 
 ib = IB()
 result = {{}}
@@ -193,6 +194,18 @@ try:
                 data['iv'] = g.impliedVol
 
             ib.cancelMktData(qualified[0])
+
+            # Get margin for this position using whatIfOrder
+            try:
+                order = MarketOrder("BUY", 1)  # Simulate closing 1 contract
+                whatif = ib.whatIfOrder(qualified[0], order)
+                if whatif and whatif.maintMarginChange:
+                    maint_change = float(whatif.maintMarginChange)
+                    # Negative change means margin would be released (currently used)
+                    data['margin'] = -maint_change if maint_change < 0 else 0
+            except:
+                pass
+
             result[key] = data
 
     ib.disconnect()

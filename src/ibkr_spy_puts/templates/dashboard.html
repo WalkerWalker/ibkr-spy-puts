@@ -394,6 +394,10 @@
                 <span class="metric-label">Unrealized P&L</span>
                 <span id="unrealized-pnl" class="metric-value neutral">--</span>
             </div>
+            <div class="metric">
+                <span class="metric-label">Maintenance Margin</span>
+                <span id="total-margin" class="metric-value neutral">--</span>
+            </div>
         </div>
 
         <div class="card">
@@ -446,10 +450,11 @@
                         <th></th>
                         <th>Contract</th>
                         <th>DTE</th>
+                        <th>DIT</th>
                         <th>Entry</th>
                         <th>P&L %</th>
-                        <th>TP</th>
-                        <th>SL</th>
+                        <th>Delta</th>
+                        <th>Margin</th>
                         <th>Position</th>
                         <th>Orders</th>
                     </tr>
@@ -462,14 +467,15 @@
                     {% set has_tp = order_key in tp_orders %}
                     {% set has_sl = order_key in sl_orders %}
                     {% set orders_ok = has_tp and has_sl %}
-                    <tr class="position-row" data-position-id="{{ pos.id }}" onclick="togglePositionOrders({{ pos.id }})">
+                    <tr class="position-row" data-position-id="{{ pos.id }}" data-strike="{{ pos.strike }}" data-expiration="{{ pos.expiration|string|replace('-', '') }}" onclick="togglePositionOrders({{ pos.id }})">
                         <td class="expand-cell"><span class="expand-icon">&#9654;</span></td>
                         <td class="symbol-cell">{{ pos.symbol }} {{ pos.strike|int }}P {{ pos.expiration.strftime('%m/%d') if pos.expiration else '' }}</td>
                         <td>{{ pos.days_to_expiry }}</td>
+                        <td>{{ pos.days_in_trade or 0 }}</td>
                         <td>${{ "%.2f"|format(pos.entry_price) }}</td>
                         <td class="pnl">--</td>
-                        <td class="positive">${{ "%.2f"|format(pos.expected_tp_price) }}</td>
-                        <td class="negative">${{ "%.2f"|format(pos.expected_sl_price) }}</td>
+                        <td class="delta">--</td>
+                        <td class="margin">--</td>
                         <td>
                             {% if is_verified %}
                                 <span class="status verified">Live</span>
@@ -496,7 +502,7 @@
                     {# Expandable orders row #}
                     <tr class="orders-row" id="orders-{{ pos.id }}" style="display: none;">
                         <td></td>
-                        <td colspan="8" class="orders-cell">
+                        <td colspan="9" class="orders-cell">
                             <table class="orders-table">
                                 <tr>
                                     <th>Type</th>
@@ -532,7 +538,7 @@
                     {% endfor %}
                     {% if not positions %}
                     <tr>
-                        <td colspan="9" style="text-align: center; color: #666;">No open positions</td>
+                        <td colspan="10" style="text-align: center; color: #666;">No open positions</td>
                     </tr>
                     {% endif %}
                 </tbody>
@@ -664,13 +670,14 @@
                 let totalUnrealizedPnl = 0;
                 let totalDelta = 0;
                 let totalTheta = 0;
+                let totalMargin = 0;
                 let hasLiveData = false;
 
                 for (const pos of positions) {
                     const row = document.querySelector(`tr.position-row[data-position-id="${pos.id}"]`);
                     if (!row) continue;
 
-                    // Update P&L % only
+                    // Update P&L %
                     const pnlEl = row.querySelector('.pnl');
                     if (pos.unrealized_pnl_pct !== undefined && pos.unrealized_pnl_pct !== null && pnlEl) {
                         const pnlText = pos.unrealized_pnl_pct >= 0 ?
@@ -682,6 +689,23 @@
                     }
                     if (pos.unrealized_pnl !== undefined && pos.unrealized_pnl !== null) {
                         totalUnrealizedPnl += pos.unrealized_pnl;
+                    }
+
+                    // Update Delta in the row (SPY equivalent shares)
+                    const deltaEl = row.querySelector('.delta');
+                    if (pos.delta !== undefined && pos.delta !== null && deltaEl) {
+                        const spyDelta = Math.abs(pos.delta) * 100 * (pos.quantity || 1);
+                        deltaEl.textContent = `${spyDelta.toFixed(0)} SPY`;
+                        hasLiveData = true;
+                    }
+
+                    // Update Margin in the row
+                    const marginEl = row.querySelector('.margin');
+                    if (pos.margin !== undefined && pos.margin !== null && marginEl) {
+                        const posMargin = pos.margin * (pos.quantity || 1);
+                        marginEl.textContent = `$${posMargin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
+                        totalMargin += posMargin;
+                        hasLiveData = true;
                     }
 
                     // Accumulate Greeks
@@ -701,6 +725,7 @@
                 const unrealizedPnlEl = document.getElementById('unrealized-pnl');
                 const totalDeltaEl = document.getElementById('total-delta');
                 const totalThetaEl = document.getElementById('total-theta');
+                const totalMarginEl = document.getElementById('total-margin');
 
                 if (hasLiveData) {
                     if (unrealizedPnlEl) {
@@ -713,6 +738,9 @@
                     if (totalThetaEl) {
                         totalThetaEl.textContent = `+$${totalTheta.toFixed(0)}/day`;
                     }
+                    if (totalMarginEl) {
+                        totalMarginEl.textContent = `$${totalMargin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
+                    }
                 } else {
                     // No live data - market likely closed
                     if (unrealizedPnlEl) {
@@ -724,6 +752,9 @@
                     }
                     if (totalThetaEl) {
                         totalThetaEl.textContent = '--/day';
+                    }
+                    if (totalMarginEl) {
+                        totalMarginEl.textContent = '--';
                     }
                 }
 

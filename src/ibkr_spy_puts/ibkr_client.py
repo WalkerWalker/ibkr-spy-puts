@@ -162,15 +162,43 @@ class IBKRClient:
         Returns:
             Expiration date closest to target DTE, or None if unavailable.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
         expirations = self.get_option_expirations(symbol)
         if not expirations:
+            logger.warning(f"No expirations found for {symbol}")
             return None
 
         today = date.today()
         target_date = today + timedelta(days=target_dte)
 
-        # Find expiration closest to target date
-        closest = min(expirations, key=lambda x: abs((x - target_date).days))
+        # Filter to reasonable range (30 days before to 60 days after target)
+        min_date = target_date - timedelta(days=30)
+        max_date = target_date + timedelta(days=60)
+        candidates = [exp for exp in expirations if min_date <= exp <= max_date]
+
+        if not candidates:
+            candidates = expirations  # Fallback to all if none in range
+
+        # Sort by distance from target date
+        sorted_candidates = sorted(candidates, key=lambda x: abs((x - target_date).days))
+
+        # Log the selection process for transparency
+        logger.info(f"=== Expiration Selection (target DTE: {target_dte}) ===")
+        logger.info(f"  Today: {today}, Target date: {target_date}")
+        for i, exp in enumerate(sorted_candidates[:5]):  # Top 5 candidates
+            actual_dte = (exp - today).days
+            diff_from_target = (exp - target_date).days
+            marker = " <-- SELECTED" if i == 0 else ""
+            logger.info(
+                f"  #{i+1}: {exp} (DTE: {actual_dte}, diff: {diff_from_target:+d} days){marker}"
+            )
+
+        closest = sorted_candidates[0]
+        actual_dte = (closest - today).days
+        logger.info(f"Selected: {closest} with {actual_dte} DTE (target was {target_dte})")
+
         return closest
 
     def get_option_chain_with_greeks(

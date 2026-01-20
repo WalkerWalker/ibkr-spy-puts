@@ -7,7 +7,7 @@ Automatically skips weekends and US market holidays.
 import logging
 import signal
 import sys
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -369,6 +369,20 @@ def create_trade_function(
                     stop_loss_pct=bracket_settings.stop_loss_pct,
                 )
 
+                # Extract commission from fill if available
+                commission = Decimal("0")
+                fill_time = datetime.now(timezone.utc)
+                if result.parent_order_id and hasattr(result, 'parent_trade') and result.parent_trade:
+                    parent_trade = result.parent_trade
+                    if parent_trade.fills:
+                        fill = parent_trade.fills[0]
+                        if fill.commissionReport and fill.commissionReport.commission:
+                            commission = Decimal(str(fill.commissionReport.commission))
+                            logger.info(f"Commission from fill: ${commission}")
+                        if fill.time:
+                            fill_time = fill.time
+                            logger.info(f"Fill time from execution: {fill_time}")
+
                 # Log to trades table (execution history)
                 db_trade = Trade(
                     trade_date=date.today(),
@@ -378,7 +392,8 @@ def create_trade_function(
                     quantity=trade_order.quantity,
                     action="SELL",
                     price=Decimal(str(entry_price)),
-                    fill_time=datetime.now(),
+                    fill_time=fill_time,
+                    commission=commission,
                     strategy_id="spy-put-selling",
                 )
                 trade_id = db.insert_trade(db_trade)
@@ -391,7 +406,7 @@ def create_trade_function(
                     expiration=trade_order.option.expiration,
                     quantity=trade_order.quantity,
                     entry_price=Decimal(str(entry_price)),
-                    entry_time=datetime.now(),
+                    entry_time=fill_time,  # Use actual fill time from execution
                     expected_tp_price=Decimal(str(actual_bracket.take_profit_price)),
                     expected_sl_price=Decimal(str(actual_bracket.stop_loss_price)),
                     status="OPEN",
@@ -508,7 +523,7 @@ def create_snapshot_function(port: int | None = None) -> Callable[[], None]:
             # Create and save snapshot
             snapshot = BookSnapshot(
                 snapshot_date=date.today(),
-                snapshot_time=datetime.now(),
+                snapshot_time=datetime.now(timezone.utc),
                 open_positions=len(open_positions),
                 total_contracts=total_contracts,
                 total_delta=total_delta if total_delta else None,

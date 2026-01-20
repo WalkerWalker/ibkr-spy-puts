@@ -301,7 +301,7 @@ class Database:
         """Get open positions with calculated fields for dashboard display.
 
         Returns:
-            List of position dicts with days_to_expiry.
+            List of position dicts with days_to_expiry and entry_time.
         """
         with self.cursor() as cur:
             cur.execute("""
@@ -316,6 +316,7 @@ class Database:
                     expected_tp_price,
                     expected_sl_price,
                     (expiration - CURRENT_DATE) as days_to_expiry,
+                    (CURRENT_DATE - entry_time::date) as days_in_trade,
                     strategy_id
                 FROM positions
                 WHERE status = 'OPEN'
