@@ -470,13 +470,14 @@ def create_snapshot_function(port: int | None = None) -> Callable[[], None]:
             spy_price = client.get_spy_price()
             logger.info(f"SPY price: {spy_price}")
 
-            # Get account summary for margin
-            account_summary = client.get_account_summary()
-            maintenance_margin = None
-            unrealized_pnl = None
+            # Get margin used by SPY puts (via whatIfOrder simulation)
+            maintenance_margin = client.get_margin_for_spy_puts()
+            logger.info(f"Margin used by SPY puts: {maintenance_margin}")
 
+            # Get unrealized P&L from account summary
+            account_summary = client.get_account_summary()
+            unrealized_pnl = None
             if account_summary:
-                maintenance_margin = account_summary.get("MaintMarginReq")
                 unrealized_pnl = account_summary.get("UnrealizedPnL")
 
             # Aggregate Greeks from live positions

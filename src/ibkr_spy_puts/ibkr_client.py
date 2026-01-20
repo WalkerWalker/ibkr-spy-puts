@@ -884,6 +884,79 @@ class IBKRClient:
             print(f"Order placement failed: {e}")
             return None
 
+    def get_margin_for_spy_puts(self) -> float | None:
+        """Calculate margin used by all SPY put positions.
+
+        Uses whatIfOrder to simulate closing each SPY put position individually
+        and sums up the margin that would be released. This allows seeing
+        margin per position in the logs.
+
+        Returns:
+            Margin used by SPY puts (positive value), or None on failure.
+        """
+        if not self.is_connected:
+            return None
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            from ib_insync import MarketOrder
+
+            # Get all positions
+            positions = self.ib.positions()
+
+            # Filter to SPY put options (short positions)
+            spy_puts = []
+            for pos in positions:
+                c = pos.contract
+                if (c.symbol == "SPY" and
+                    c.secType == "OPT" and
+                    getattr(c, "right", "") == "P" and
+                    pos.position < 0):  # Short position
+                    spy_puts.append(pos)
+
+            if not spy_puts:
+                logger.info("No SPY put positions found for margin calculation")
+                return 0.0
+
+            logger.info(f"Calculating margin for {len(spy_puts)} SPY put position(s)")
+
+            # Calculate margin for each position individually
+            total_maint_margin_change = 0.0
+
+            for pos in spy_puts:
+                contract = pos.contract
+                quantity = abs(int(pos.position))
+
+                # Qualify the contract
+                qualified = self.ib.qualifyContracts(contract)
+                if not qualified:
+                    logger.warning(f"Could not qualify {contract.localSymbol}")
+                    continue
+
+                # Create a market order to close (BUY to close short)
+                order = MarketOrder("BUY", quantity)
+
+                # Use whatIfOrder to simulate
+                whatif = self.ib.whatIfOrder(qualified[0], order)
+
+                if whatif and whatif.maintMarginChange:
+                    maint_change = float(whatif.maintMarginChange)
+                    margin_for_position = -maint_change if maint_change < 0 else 0
+                    total_maint_margin_change += maint_change
+                    logger.info(f"  {contract.strike} strike x{quantity}: margin ${margin_for_position:,.2f}")
+
+            # Negative change means margin would be released (margin is currently used)
+            margin_used = -total_maint_margin_change if total_maint_margin_change < 0 else 0
+
+            logger.info(f"Total margin used by SPY puts: ${margin_used:,.2f}")
+            return margin_used
+
+        except Exception as e:
+            logger.warning(f"Failed to calculate margin for SPY puts: {e}")
+            return None
+
     def get_option_greeks(
         self,
         symbol: str,
