@@ -489,11 +489,18 @@ def create_snapshot_function(port: int | None = None) -> Callable[[], None]:
             maintenance_margin = client.get_margin_for_spy_puts()
             logger.info(f"Margin used by SPY puts: {maintenance_margin}")
 
-            # Get unrealized P&L from account summary
-            account_summary = client.get_account_summary()
-            unrealized_pnl = None
-            if account_summary:
-                unrealized_pnl = account_summary.get("UnrealizedPnL")
+            # Get unrealized P&L for SPY puts only (not whole account)
+            positions_for_pnl = [
+                {
+                    "symbol": p.symbol,
+                    "strike": p.strike,
+                    "expiration": p.expiration,
+                    "entry_price": p.entry_price,
+                    "quantity": p.quantity,
+                }
+                for p in open_positions
+            ]
+            unrealized_pnl = client.get_unrealized_pnl_for_spy_puts(positions_for_pnl)
 
             # Aggregate Greeks from live positions
             total_delta = Decimal("0")

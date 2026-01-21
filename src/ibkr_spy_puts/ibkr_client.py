@@ -985,6 +985,77 @@ class IBKRClient:
             logger.warning(f"Failed to calculate margin for SPY puts: {e}")
             return None
 
+    def get_unrealized_pnl_for_spy_puts(self, positions: list) -> float | None:
+        """Calculate unrealized P&L for SPY put positions.
+
+        For short puts: profit = (entry_price - current_price) * quantity * 100
+
+        Args:
+            positions: List of position dicts with symbol, strike, expiration, entry_price, quantity
+
+        Returns:
+            Total unrealized P&L for the positions, or None on failure.
+        """
+        if not self.is_connected:
+            return None
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
+            from ib_insync import Option as IbOption
+
+            total_pnl = 0.0
+            logger.info(f"Calculating unrealized P&L for {len(positions)} position(s)")
+
+            for pos in positions:
+                symbol = pos.get("symbol", "SPY")
+                strike = float(pos.get("strike", 0))
+                entry_price = float(pos.get("entry_price", 0))
+                quantity = int(pos.get("quantity", 1))
+
+                # Handle expiration as date object or string
+                exp = pos.get("expiration")
+                if hasattr(exp, "strftime"):
+                    exp_str = exp.strftime("%Y%m%d")
+                else:
+                    exp_str = str(exp).replace("-", "")
+
+                # Get current price
+                opt = IbOption(symbol, exp_str, strike, "P", "SMART")
+                qualified = self.ib.qualifyContracts(opt)
+
+                if not qualified:
+                    logger.warning(f"Could not qualify {symbol} {strike}P {exp_str}")
+                    continue
+
+                self.ib.reqMarketDataType(3)  # Delayed data
+                ticker = self.ib.reqMktData(qualified[0], "", False, False)
+                self.ib.sleep(2)
+
+                current_price = None
+                if ticker.bid and ticker.bid > 0 and ticker.ask and ticker.ask > 0:
+                    current_price = (ticker.bid + ticker.ask) / 2
+                elif ticker.last and ticker.last > 0:
+                    current_price = ticker.last
+
+                self.ib.cancelMktData(qualified[0])
+
+                if current_price is not None:
+                    # For short puts: profit when price goes down
+                    pos_pnl = (entry_price - current_price) * quantity * 100
+                    total_pnl += pos_pnl
+                    logger.info(f"  {strike} strike: entry=${entry_price:.2f}, current=${current_price:.2f}, P&L=${pos_pnl:.2f}")
+                else:
+                    logger.warning(f"  {strike} strike: no price available")
+
+            logger.info(f"Total unrealized P&L for SPY puts: ${total_pnl:,.2f}")
+            return total_pnl
+
+        except Exception as e:
+            logger.warning(f"Failed to calculate unrealized P&L for SPY puts: {e}")
+            return None
+
     def get_option_greeks(
         self,
         symbol: str,

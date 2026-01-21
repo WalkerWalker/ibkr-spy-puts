@@ -452,6 +452,7 @@
                         <th>DTE</th>
                         <th>DIT</th>
                         <th>Entry</th>
+                        <th>P&L $</th>
                         <th>P&L %</th>
                         <th>Delta</th>
                         <th>Margin</th>
@@ -473,7 +474,8 @@
                         <td>{{ pos.days_to_expiry }}</td>
                         <td>{{ pos.days_in_trade or 0 }}</td>
                         <td>${{ "%.2f"|format(pos.entry_price) }}</td>
-                        <td class="pnl">--</td>
+                        <td class="pnl-dollars">--</td>
+                        <td class="pnl-pct">--</td>
                         <td class="delta">--</td>
                         <td class="margin">--</td>
                         <td>
@@ -502,7 +504,7 @@
                     {# Expandable orders row #}
                     <tr class="orders-row" id="orders-{{ pos.id }}" style="display: none;">
                         <td></td>
-                        <td colspan="9" class="orders-cell">
+                        <td colspan="10" class="orders-cell">
                             <table class="orders-table">
                                 <tr>
                                     <th>Type</th>
@@ -538,7 +540,7 @@
                     {% endfor %}
                     {% if not positions %}
                     <tr>
-                        <td colspan="10" style="text-align: center; color: #666;">No open positions</td>
+                        <td colspan="11" style="text-align: center; color: #666;">No open positions</td>
                     </tr>
                     {% endif %}
                 </tbody>
@@ -683,17 +685,25 @@
                     const row = document.querySelector(`tr.position-row[data-position-id="${pos.id}"]`);
                     if (!row) continue;
 
-                    // Update P&L %
-                    const pnlEl = row.querySelector('.pnl');
-                    if (pos.unrealized_pnl_pct !== undefined && pos.unrealized_pnl_pct !== null && pnlEl) {
-                        const pnlText = pos.unrealized_pnl_pct >= 0 ?
+                    // Update P&L $ column
+                    const pnlDollarsEl = row.querySelector('.pnl-dollars');
+                    if (pos.unrealized_pnl !== undefined && pos.unrealized_pnl !== null && pnlDollarsEl) {
+                        const pnlText = pos.unrealized_pnl >= 0 ?
+                            `+$${pos.unrealized_pnl.toFixed(0)}` :
+                            `-$${Math.abs(pos.unrealized_pnl).toFixed(0)}`;
+                        pnlDollarsEl.textContent = pnlText;
+                        pnlDollarsEl.className = 'pnl-dollars ' + (pos.unrealized_pnl >= 0 ? 'positive' : 'negative');
+                        totalUnrealizedPnl += pos.unrealized_pnl;
+                    }
+
+                    // Update P&L % column
+                    const pnlPctEl = row.querySelector('.pnl-pct');
+                    if (pos.unrealized_pnl_pct !== undefined && pos.unrealized_pnl_pct !== null && pnlPctEl) {
+                        const pctText = pos.unrealized_pnl_pct >= 0 ?
                             `+${pos.unrealized_pnl_pct.toFixed(1)}%` :
                             `${pos.unrealized_pnl_pct.toFixed(1)}%`;
-                        pnlEl.textContent = pnlText;
-                        pnlEl.className = 'pnl ' + (pos.unrealized_pnl_pct >= 0 ? 'positive' : 'negative');
-                    }
-                    if (pos.unrealized_pnl !== undefined && pos.unrealized_pnl !== null) {
-                        totalUnrealizedPnl += pos.unrealized_pnl;
+                        pnlPctEl.textContent = pctText;
+                        pnlPctEl.className = 'pnl-pct ' + (pos.unrealized_pnl_pct >= 0 ? 'positive' : 'negative');
                     }
 
                     // Update Delta in the row (SPY equivalent shares)
@@ -728,8 +738,20 @@
                 const totalThetaEl = document.getElementById('total-theta');
                 const totalMarginEl = document.getElementById('total-margin');
 
+                // Margin is always available via whatIfOrder (works even when market closed)
+                // Always show sum of individual margins
+                if (totalMarginEl) {
+                    if (totalMargin > 0) {
+                        totalMarginEl.textContent = `$${totalMargin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
+                    } else if (snapshotSummary && snapshotSummary.maintenance_margin !== null) {
+                        totalMarginEl.textContent = `$${snapshotSummary.maintenance_margin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
+                    } else {
+                        totalMarginEl.textContent = '--';
+                    }
+                }
+
                 if (hasLiveData) {
-                    // Use live calculated data
+                    // Use live calculated data for P&L and Greeks
                     if (unrealizedPnlEl) {
                         unrealizedPnlEl.textContent = `$${totalUnrealizedPnl.toFixed(2)}`;
                         unrealizedPnlEl.className = 'metric-value ' + (totalUnrealizedPnl >= 0 ? 'positive' : 'negative');
@@ -740,11 +762,8 @@
                     if (totalThetaEl) {
                         totalThetaEl.textContent = `+$${totalTheta.toFixed(0)}/day`;
                     }
-                    if (totalMarginEl) {
-                        totalMarginEl.textContent = `$${totalMargin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
-                    }
                 } else if (snapshotSummary) {
-                    // Use snapshot data - show with indicator
+                    // Use snapshot data for P&L and Greeks
                     if (unrealizedPnlEl && snapshotSummary.unrealized_pnl !== null) {
                         const pnl = snapshotSummary.unrealized_pnl;
                         unrealizedPnlEl.textContent = `$${pnl.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
@@ -758,9 +777,6 @@
                         const theta = Math.abs(snapshotSummary.total_theta) * 100;
                         totalThetaEl.textContent = `+$${theta.toFixed(0)}/day`;
                     }
-                    if (totalMarginEl && snapshotSummary.maintenance_margin !== null) {
-                        totalMarginEl.textContent = `$${snapshotSummary.maintenance_margin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
-                    }
                 } else {
                     // No data at all
                     if (unrealizedPnlEl) {
@@ -772,9 +788,6 @@
                     }
                     if (totalThetaEl) {
                         totalThetaEl.textContent = '--/day';
-                    }
-                    if (totalMarginEl) {
-                        totalMarginEl.textContent = '--';
                     }
                 }
 
