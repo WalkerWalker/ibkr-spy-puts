@@ -36,6 +36,7 @@ class BracketOrderResult:
     stop_loss_trade: Trade | None = None
     error_message: str | None = None
     fill_price: float | None = None
+    commission: float | None = None  # Commission from execution
     cancelled_orders: list | None = None  # Orders cancelled for conflict resolution
 
 
@@ -641,10 +642,33 @@ class IBKRClient:
                 )
 
             # =================================================================
-            # STEP 2: Log post-fill contract details
+            # STEP 2: Log post-fill contract details and extract commission
             # =================================================================
             logger.info("Step 2: Fetching post-fill contract details...")
             self.log_contract_details(contract)
+
+            # Wait briefly for commission report to arrive, then extract it
+            self.ib.sleep(2)
+            commission = None
+
+            # Try to get commission from ib.fills() which is more reliable
+            for fill in self.ib.fills():
+                if (fill.contract.conId == contract.conId and
+                    fill.execution.orderId == parent_trade.order.orderId):
+                    if fill.commissionReport and fill.commissionReport.commission:
+                        commission = float(fill.commissionReport.commission)
+                        logger.info(f"Commission from fill: ${commission:.4f}")
+                    break
+
+            # Fallback: check parent_trade.fills
+            if commission is None and parent_trade.fills:
+                fill = parent_trade.fills[0]
+                if fill.commissionReport and fill.commissionReport.commission:
+                    commission = float(fill.commissionReport.commission)
+                    logger.info(f"Commission from parent_trade.fills: ${commission:.4f}")
+
+            if commission is None:
+                logger.warning("Commission not available yet - will be 0 in trade log")
 
             # =================================================================
             # STEP 3: Place TP/SL orders (no conflict detection needed)
@@ -726,6 +750,7 @@ class IBKRClient:
                 take_profit_trade=take_profit_trade,
                 stop_loss_trade=stop_loss_trade,
                 fill_price=actual_entry_price,
+                commission=commission,
                 cancelled_orders=conflicting_orders,
             )
 

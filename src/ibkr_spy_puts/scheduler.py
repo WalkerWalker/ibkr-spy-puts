@@ -369,19 +369,21 @@ def create_trade_function(
                     stop_loss_pct=bracket_settings.stop_loss_pct,
                 )
 
-                # Extract commission from fill if available
+                # Extract commission and fill time
                 commission = Decimal("0")
                 fill_time = datetime.now(timezone.utc)
-                if result.parent_order_id and hasattr(result, 'parent_trade') and result.parent_trade:
-                    parent_trade = result.parent_trade
-                    if parent_trade.fills:
-                        fill = parent_trade.fills[0]
-                        if fill.commissionReport and fill.commissionReport.commission:
-                            commission = Decimal(str(fill.commissionReport.commission))
-                            logger.info(f"Commission from fill: ${commission}")
-                        if fill.time:
-                            fill_time = fill.time
-                            logger.info(f"Fill time from execution: {fill_time}")
+
+                # Use commission from BracketOrderResult (extracted in ibkr_client)
+                if result.commission is not None:
+                    commission = Decimal(str(result.commission))
+                    logger.info(f"Commission from result: ${commission}")
+
+                # Extract fill time from parent_trade
+                if result.parent_trade and result.parent_trade.fills:
+                    fill = result.parent_trade.fills[0]
+                    if fill.time:
+                        fill_time = fill.time
+                        logger.info(f"Fill time from execution: {fill_time}")
 
                 # Log to trades table (execution history)
                 db_trade = Trade(

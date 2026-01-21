@@ -63,6 +63,7 @@ class MockTrade:
         self.contract = contract
         self.order = order
         self.orderStatus = status
+        self.fills = []  # List of fill objects (empty by default)
 
 
 class TestStep1ConflictDetection:
