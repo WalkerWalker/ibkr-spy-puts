@@ -680,8 +680,29 @@ try:
     result["grouped_total"] = round(result["grouped_total"], 2)
     result["difference"] = round(abs(result["individual_total"] - result["grouped_total"]), 2)
 
-    # Method 3: Check current account margin vs what margin would be if we had no SPY puts
-    # This tells us the TRUE margin used by all SPY puts together
+    # Check VOO margin - what would be released if we close all VOO?
+    voo_margin = None
+    for pos in ib.positions():
+        c = pos.contract
+        if c.symbol == "VOO" and c.secType == "STK":
+            qty = abs(int(pos.position))
+            qualified = ib.qualifyContracts(c)
+            if qualified:
+                # SELL to close long stock position
+                order = MarketOrder("SELL", qty)
+                whatif = ib.whatIfOrder(qualified[0], order)
+                if whatif and whatif.maintMarginChange:
+                    maint_change = float(whatif.maintMarginChange)
+                    voo_margin = -maint_change if maint_change < 0 else 0
+                    result["voo"] = {{
+                        "symbol": "VOO",
+                        "quantity": qty,
+                        "margin_released": round(voo_margin, 2),
+                        "maint_margin_change": round(maint_change, 2)
+                    }}
+            break
+
+    # Check current account margin
     account = ib.managedAccounts()[0]
     account_values = ib.accountValues(account)
 
@@ -692,7 +713,15 @@ try:
             break
 
     result["account_current_maint_margin"] = round(current_maint, 2) if current_maint else None
-    result["note"] = "Sum of 3 whatIfOrders = grouped_total. No basket whatIfOrder available in IBKR API."
+
+    # Calculate implied SPY puts margin from group
+    if voo_margin and result.get("grouped_total"):
+        usidx_group = 48555  # From margin report
+        implied_spy_margin = usidx_group - voo_margin
+        result["implied_spy_puts_margin"] = round(implied_spy_margin, 2)
+        result["usidx_group_margin"] = usidx_group
+
+    result["note"] = "voo.margin_released = whatIfOrder for closing all VOO. implied_spy_puts_margin = USIDX group - VOO margin."
 
     ib.disconnect()
 except Exception as e:

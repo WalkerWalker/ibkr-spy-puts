@@ -1,0 +1,50 @@
+Account,Header,AccountID,AccountAlias,BaseCurrency,AsOfDateTime
+Account,Data,U***9432,,USD,2026-01-21T07:21:37Z
+MarginSummary,Header,Parameter,Security,Futures,IB-UKL,Total
+MarginSummary,Data,NetLiquidationValue,416911.112950479,0,0,416911.112950479
+MarginSummary,Data,CashValue,11479.665797019,0,0,11479.665797019
+MarginSummary,Data,StockAndBondValue,410418.21715346,0,0,410418.21715346
+MarginSummary,Data,MutualFundValue,0,0,0,0
+MarginSummary,Data,OptionValue,-4986.78,0,0,-4986.78
+MarginSummary,Data,Commodities,0,0,0,0
+MarginSummary,Data,StructuredProductsValue,0,0,0,0
+MarginSummary,Data,InterestPayableReceivableValue,0,0,0,0
+MarginSummary,Data,DividendPayableReceivableValue,0,0,0,0
+MarginSummary,Data,InitialMarginRequirement,94537.165008972,0,0,94537.165008972
+MarginSummary,Data,AvailableFunds,322373.947941507,0,0,322373.947941507
+MarginSummary,Data,MaintenanceMarginRequirement,82880.149573019,0,0,82880.149573019
+MarginSummary,Data,ExcessLiquidity,334030.96337746,0,0,334030.96337746
+MarginSummary,Data,Margin Ratio (%),22.675616474,0,0,22.675616474
+MarginDetailSecuritiesRiskBased,Header,SubSectionName,Discriminator,Currency,CombinedPortfolioName/IBProductGroupName,ProductGroupName/SubIBProductGroupName,Offset,ClassGroupName/IBClassGroupName,Exchange,Description,Symbol,Quantity,InitialMargin,MaintenanceMargin,ConversionRateToBase
+MarginDetailSecuritiesRiskBased,Data,BaseCurrencySummary,Currency Margin,USD,,,,,,,,,0,0,1
+MarginDetailSecuritiesRiskBased,Data,BaseCurrencySummary,ProductGroups,USD,,,,,,,,,0,0,1
+MarginDetailSecuritiesRiskBased,Data,BaseCurrencySummary,CombinedPortfolios,USD,,,,,,,,,24808.225008972,21572.369573019,1
+MarginDetailSecuritiesRiskBased,Data,BaseCurrencySummary,IBClassGroups,USD,,,,,,,,,0,0,1
+MarginDetailSecuritiesRiskBased,Data,BaseCurrencySummary,IBProductGroups,USD,,,,,,,,,55700.78,48554.91,1
+MarginDetailSecuritiesRiskBased,Data,BaseCurrencySummary,Total,USD,,,,,,,,,80509.005008972,70127.279573019,1
+MarginDetailSecuritiesRiskBased,Data,CombinedPortfolios,CombinedPortfolio,CHF,_LISN,,,,EBS,,,,19630.5,17070,1.263759202
+MarginDetailSecuritiesRiskBased,Data,CombinedPortfolios,PositionComponent,CHF,_LISN,,,,EBS,LISN,CHOCOLADEFABRIKEN LINDT-REG,1,,,1.263759202
+MarginDetailSecuritiesRiskBased,Data,IBProductGroups,IBProductGroup,USD,US:USIDX,,0.50,,,,,,55700.78,48554.91,1
+MarginDetailSecuritiesRiskBased,Data,IBProductGroups,IBProductGroup,USD,US:USIDX,US:C00018,1.00,,,,,,,,1
+MarginDetailSecuritiesRiskBased,Data,IBProductGroups,IBClassGroup,USD,US:USIDX,US:C00018,,CC_SPY,AMEX,,,,0,0,1
+MarginDetailSecuritiesRiskBased,Data,IBProductGroups,PositionComponent,USD,,,,CC_SPY,,SPY 17APR26 615 P,SPY   260417P00615000,-1,,,1
+MarginDetailSecuritiesRiskBased,Data,IBProductGroups,PositionComponent,USD,,,,CC_SPY,,SPY 17APR26 625 P,SPY   260417P00625000,-1,,,1
+MarginDetailSecuritiesRiskBased,Data,IBProductGroups,PositionComponent,USD,,,,CC_SPY,,SPY 17APR26 630 P,SPY   260417P00630000,-4,,,1
+MarginDetailSecuritiesRiskBased,Data,IBProductGroups,IBClassGroup,USD,US:USIDX,US:C00018,,CC_VOO,NYSE,,,,0,0,1
+MarginDetailSecuritiesRiskBased,Data,IBProductGroups,PositionComponent,USD,,,,CC_VOO,,VANGUARD S&P 500 ETF,VOO,290.915,,,1
+Portfolio Margin Details,Header,SubSectionName,Discriminator,Currency,PortfolioGroupName/IBProductGroupName,ProductGroupName/SubIBProductGroupName,Offset,ClassGroupName/IBClassGroupName,Exchange,Description,Symbol,Quantity,Initial Margin,Maintenance Margin,ConversionRateToBase
+Portfolio Margin Details,Data,BaseCurrencySummary,PortfolioGroup,USD,,,,,,,,,0,0,1
+Portfolio Margin Details,Data,BaseCurrencySummary,ProductGroup,USD,,,,,,,,,0,0,1
+Portfolio Margin Details,Data,BaseCurrencySummary,ClassGroup,USD,,,,,,,,,14028.15,12752.87,1
+Portfolio Margin Details,Data,BaseCurrencySummary,BondClassGroup,USD,,,,,,,,,0,0,1
+Portfolio Margin Details,Data,BaseCurrencySummary,IBClassGroup,USD,,,,,,,,,0,0,1
+Portfolio Margin Details,Data,BaseCurrencySummary,IBProductGroup,USD,,,,,,,,,0,0,1
+Portfolio Margin Details,Data,BaseCurrencySummary,Total,USD,,,,,,,,,14028.15,12752.87,1
+Portfolio Margin Details,Data,ClassGroups,ClassGroup,USD,,,,BOXX,,,,,4377.91,3979.92,1
+Portfolio Margin Details,Data,ClassGroups,PositionComponent,USD,,,,BOXX,,ALPHA ARCHITECT 1-3 MNTH BOX,BOXX,230,,,1
+Portfolio Margin Details,Data,ClassGroups,ClassGroup,USD,,,,BRKB,,,,,9650.24,8772.95,1
+Portfolio Margin Details,Data,ClassGroups,PositionComponent,USD,,,,BRKB,,BERKSHIRE HATHAWAY INC-CL B,BRK B,120.506,,,1
+SpanMarginOverview,Header,Discriminator,Currency,Exchanges,InitialMargin,MaintenanceMargin,ConversionRateToBase
+SpanMarginOverview,Data,ExchangeSummary,CHF,"EUREX, IBIS, IBIS2, XETRA, FWB, FWB2, SWB, SWB2, GETTEX, GETTEX2, VIRTX, EBS, EUREXUK, EUREXCBL, VSE",19630.5,17070,1.263759202
+SpanMarginOverview,Data,ExchangeSummary,USD,IBHouse,25349.11,20962.49,1
+SpanMarginOverview,Data,ExchangeSummary,USD,OCC,44379.83,40345.3,1
