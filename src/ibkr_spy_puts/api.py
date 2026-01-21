@@ -204,18 +204,6 @@ try:
 
     contracts_info = {contracts_json}
 
-    # First, get IBKR positions to find actual quantities per contract
-    # This ensures margin is calculated correctly for aggregated positions
-    ibkr_positions = {{}}
-    for pos in ib.positions():
-        c = pos.contract
-        if c.symbol == "SPY" and c.secType == "OPT" and getattr(c, "right", "") == "P" and pos.position < 0:
-            key = f"{{c.symbol}}_{{int(c.strike)}}_{{c.lastTradeDateOrContractMonth}}"
-            ibkr_positions[key] = {{
-                "contract": c,
-                "quantity": abs(int(pos.position))
-            }}
-
     for info in contracts_info:
         key = f"{{info['symbol']}}_{{int(info['strike'])}}_{{info['expiration']}}"
 
@@ -244,16 +232,14 @@ try:
 
             ib.cancelMktData(qualified[0])
 
-            # Get margin using IBKR's actual position quantity, then calculate per-contract
+            # Get margin for this position using whatIfOrder (1 contract at a time)
             try:
-                ibkr_qty = ibkr_positions.get(key, {{}}).get("quantity", 1)
-                order = MarketOrder("BUY", ibkr_qty)  # Close full IBKR position
+                order = MarketOrder("BUY", 1)  # Simulate closing 1 contract
                 whatif = ib.whatIfOrder(qualified[0], order)
                 if whatif and whatif.maintMarginChange:
                     maint_change = float(whatif.maintMarginChange)
-                    total_margin = -maint_change if maint_change < 0 else 0
-                    # Per-contract margin (will be multiplied by DB position qty in JS)
-                    data['margin'] = total_margin / ibkr_qty
+                    # Negative change means margin would be released (currently used)
+                    data['margin'] = -maint_change if maint_change < 0 else 0
             except:
                 pass
 
