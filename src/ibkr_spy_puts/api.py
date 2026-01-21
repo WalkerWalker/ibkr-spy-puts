@@ -73,7 +73,11 @@ async def get_positions():
 
 @app.get("/api/positions/live")
 async def get_positions_live():
-    """Get all open positions enriched with live IBKR data (price, Greeks, P&L)."""
+    """Get all open positions enriched with live IBKR data (price, Greeks, P&L).
+
+    If live data is unavailable (market closed), returns snapshot data from last market close.
+    Response includes metadata indicating if data is live or from snapshot.
+    """
     import asyncio
 
     db = get_db()
@@ -82,6 +86,22 @@ async def get_positions_live():
 
         # Fetch live data from IBKR via subprocess
         live_data = await asyncio.to_thread(_fetch_live_position_data, positions)
+
+        # Check if we got any live data
+        has_live_data = bool(live_data) and not live_data.get('error')
+
+        # Count positions with actual Greeks data
+        positions_with_greeks = sum(1 for v in live_data.values() if isinstance(v, dict) and v.get('delta') is not None)
+        has_live_data = positions_with_greeks > 0
+
+        # If no live data, get latest snapshot for summary metrics
+        snapshot = None
+        snapshot_time = None
+        if not has_live_data:
+            snapshots = db.get_snapshots(limit=1)
+            if snapshots:
+                snapshot = snapshots[0]
+                snapshot_time = snapshot.get('snapshot_time')
 
         # Enrich positions with live data
         enriched = []
@@ -95,7 +115,7 @@ async def get_positions_live():
                 exp_str = str(exp).replace('-', '')
             key = f"{pos['symbol']}_{int(pos['strike'])}_{exp_str}"
 
-            if key in live_data:
+            if key in live_data and isinstance(live_data[key], dict):
                 live = live_data[key]
                 pos_copy['current_price'] = live.get('mid')
                 pos_copy['bid'] = live.get('bid')
@@ -119,7 +139,24 @@ async def get_positions_live():
 
             enriched.append(pos_copy)
 
-        return serialize_decimal(enriched)
+        # Build response with metadata
+        response = {
+            "positions": serialize_decimal(enriched),
+            "data_source": "live" if has_live_data else "snapshot",
+            "snapshot_time": serialize_decimal(snapshot_time) if snapshot_time else None,
+        }
+
+        # Include snapshot summary if using snapshot data
+        if snapshot and not has_live_data:
+            response["snapshot_summary"] = {
+                "total_delta": snapshot.get('total_delta'),
+                "total_theta": snapshot.get('total_theta'),
+                "unrealized_pnl": snapshot.get('unrealized_pnl'),
+                "maintenance_margin": snapshot.get('maintenance_margin'),
+                "spy_price": snapshot.get('spy_price'),
+            }
+
+        return response
     finally:
         db.disconnect()
 

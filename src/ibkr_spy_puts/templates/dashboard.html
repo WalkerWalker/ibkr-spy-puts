@@ -665,13 +665,19 @@
         async function fetchLivePositions() {
             try {
                 const response = await fetch('/api/positions/live');
-                const positions = await response.json();
+                const data = await response.json();
+
+                // Handle new response format with data_source
+                const positions = data.positions || data;  // Fallback for old format
+                const dataSource = data.data_source || 'live';
+                const snapshotTime = data.snapshot_time;
+                const snapshotSummary = data.snapshot_summary;
 
                 let totalUnrealizedPnl = 0;
                 let totalDelta = 0;
                 let totalTheta = 0;
                 let totalMargin = 0;
-                let hasLiveData = false;
+                let hasLiveData = dataSource === 'live';
 
                 for (const pos of positions) {
                     const row = document.querySelector(`tr.position-row[data-position-id="${pos.id}"]`);
@@ -685,7 +691,6 @@
                             `${pos.unrealized_pnl_pct.toFixed(1)}%`;
                         pnlEl.textContent = pnlText;
                         pnlEl.className = 'pnl ' + (pos.unrealized_pnl_pct >= 0 ? 'positive' : 'negative');
-                        hasLiveData = true;
                     }
                     if (pos.unrealized_pnl !== undefined && pos.unrealized_pnl !== null) {
                         totalUnrealizedPnl += pos.unrealized_pnl;
@@ -696,7 +701,6 @@
                     if (pos.delta !== undefined && pos.delta !== null && deltaEl) {
                         const spyDelta = Math.abs(pos.delta) * 100 * (pos.quantity || 1);
                         deltaEl.textContent = `${spyDelta.toFixed(0)} SPY`;
-                        hasLiveData = true;
                     }
 
                     // Update Margin in the row
@@ -705,19 +709,16 @@
                         const posMargin = pos.margin * (pos.quantity || 1);
                         marginEl.textContent = `$${posMargin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
                         totalMargin += posMargin;
-                        hasLiveData = true;
                     }
 
                     // Accumulate Greeks
                     if (pos.delta !== undefined && pos.delta !== null) {
                         const positionDelta = Math.abs(pos.delta) * 100 * (pos.quantity || 1);
                         totalDelta += positionDelta;
-                        hasLiveData = true;
                     }
                     if (pos.theta !== undefined && pos.theta !== null) {
                         const positionTheta = Math.abs(pos.theta) * 100 * (pos.quantity || 1);
                         totalTheta += positionTheta;
-                        hasLiveData = true;
                     }
                 }
 
@@ -728,6 +729,7 @@
                 const totalMarginEl = document.getElementById('total-margin');
 
                 if (hasLiveData) {
+                    // Use live calculated data
                     if (unrealizedPnlEl) {
                         unrealizedPnlEl.textContent = `$${totalUnrealizedPnl.toFixed(2)}`;
                         unrealizedPnlEl.className = 'metric-value ' + (totalUnrealizedPnl >= 0 ? 'positive' : 'negative');
@@ -741,8 +743,26 @@
                     if (totalMarginEl) {
                         totalMarginEl.textContent = `$${totalMargin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
                     }
+                } else if (snapshotSummary) {
+                    // Use snapshot data - show with indicator
+                    if (unrealizedPnlEl && snapshotSummary.unrealized_pnl !== null) {
+                        const pnl = snapshotSummary.unrealized_pnl;
+                        unrealizedPnlEl.textContent = `$${pnl.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                        unrealizedPnlEl.className = 'metric-value ' + (pnl >= 0 ? 'positive' : 'negative');
+                    }
+                    if (totalDeltaEl && snapshotSummary.total_delta !== null) {
+                        const delta = Math.abs(snapshotSummary.total_delta) * 100;
+                        totalDeltaEl.textContent = `${delta.toFixed(0)} SPY`;
+                    }
+                    if (totalThetaEl && snapshotSummary.total_theta !== null) {
+                        const theta = Math.abs(snapshotSummary.total_theta) * 100;
+                        totalThetaEl.textContent = `+$${theta.toFixed(0)}/day`;
+                    }
+                    if (totalMarginEl && snapshotSummary.maintenance_margin !== null) {
+                        totalMarginEl.textContent = `$${snapshotSummary.maintenance_margin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
+                    }
                 } else {
-                    // No live data - market likely closed
+                    // No data at all
                     if (unrealizedPnlEl) {
                         unrealizedPnlEl.textContent = '--';
                         unrealizedPnlEl.className = 'metric-value neutral';
@@ -758,13 +778,19 @@
                     }
                 }
 
-                // Update last fetch time
+                // Update last fetch time with data source indicator
                 const updateEl = document.getElementById('positions-last-update');
                 if (updateEl) {
                     if (hasLiveData) {
-                        updateEl.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+                        updateEl.textContent = `Live Data - Updated ${new Date().toLocaleTimeString()}`;
+                        updateEl.style.color = '#00ff88';
+                    } else if (snapshotTime) {
+                        const snapDate = new Date(snapshotTime);
+                        updateEl.textContent = `Snapshot from ${snapDate.toLocaleString()} (Market Closed)`;
+                        updateEl.style.color = '#ffaa00';
                     } else {
-                        updateEl.textContent = `Market Closed - No Live Data (${new Date().toLocaleTimeString()})`;
+                        updateEl.textContent = `Market Closed - No Data (${new Date().toLocaleTimeString()})`;
+                        updateEl.style.color = '#888';
                     }
                 }
 
@@ -772,7 +798,8 @@
                 console.error('Failed to fetch live positions:', error);
                 const updateEl = document.getElementById('positions-last-update');
                 if (updateEl) {
-                    updateEl.textContent = 'Failed to fetch live data';
+                    updateEl.textContent = 'Failed to fetch data';
+                    updateEl.style.color = '#ff4444';
                 }
             }
         }
