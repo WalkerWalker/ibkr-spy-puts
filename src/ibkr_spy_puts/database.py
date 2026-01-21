@@ -320,7 +320,7 @@ class Database:
                     strategy_id
                 FROM positions
                 WHERE status = 'OPEN'
-                ORDER BY expiration, strike
+                ORDER BY (CURRENT_DATE - entry_time::date) ASC, strike
             """)
             return [dict(row) for row in cur.fetchall()]
 
