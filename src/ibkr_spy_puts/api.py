@@ -680,6 +680,20 @@ try:
     result["grouped_total"] = round(result["grouped_total"], 2)
     result["difference"] = round(abs(result["individual_total"] - result["grouped_total"]), 2)
 
+    # Method 3: Check current account margin vs what margin would be if we had no SPY puts
+    # This tells us the TRUE margin used by all SPY puts together
+    account = ib.managedAccounts()[0]
+    account_values = ib.accountValues(account)
+
+    current_maint = None
+    for av in account_values:
+        if av.tag == "MaintMarginReq" and av.currency == "USD":
+            current_maint = float(av.value)
+            break
+
+    result["account_current_maint_margin"] = round(current_maint, 2) if current_maint else None
+    result["note"] = "Sum of 3 whatIfOrders = grouped_total. No basket whatIfOrder available in IBKR API."
+
     ib.disconnect()
 except Exception as e:
     result["error"] = str(e)
