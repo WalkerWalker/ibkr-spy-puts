@@ -597,8 +597,6 @@
         </div>
     </div>
 
-    <p class="timestamp">Last updated: {{ now().strftime('%Y-%m-%d %H:%M:%S') }} | <a href="/" style="color: #00d4ff;">Refresh</a></p>
-
     <script>
         // Toggle collapsible sections
         function toggleSection(id) {
@@ -680,6 +678,8 @@
                 let totalTheta = 0;
                 let totalMargin = 0;
                 let hasLiveData = dataSource === 'live';
+                let hasPnlData = false;  // Track if we have any P&L data
+                let hasDeltaData = false;  // Track if we have any delta data
 
                 for (const pos of positions) {
                     const row = document.querySelector(`tr.position-row[data-position-id="${pos.id}"]`);
@@ -694,6 +694,7 @@
                         pnlDollarsEl.textContent = pnlText;
                         pnlDollarsEl.className = 'pnl-dollars ' + (pos.unrealized_pnl >= 0 ? 'positive' : 'negative');
                         totalUnrealizedPnl += pos.unrealized_pnl;
+                        hasPnlData = true;
                     }
 
                     // Update P&L % column
@@ -725,6 +726,7 @@
                     if (pos.delta !== undefined && pos.delta !== null) {
                         const positionDelta = Math.abs(pos.delta) * 100 * (pos.quantity || 1);
                         totalDelta += positionDelta;
+                        hasDeltaData = true;
                     }
                     if (pos.theta !== undefined && pos.theta !== null) {
                         const positionTheta = Math.abs(pos.theta) * 100 * (pos.quantity || 1);
@@ -753,14 +755,27 @@
                 if (hasLiveData) {
                     // Use live calculated data for P&L and Greeks
                     if (unrealizedPnlEl) {
-                        unrealizedPnlEl.textContent = `$${totalUnrealizedPnl.toFixed(2)}`;
-                        unrealizedPnlEl.className = 'metric-value ' + (totalUnrealizedPnl >= 0 ? 'positive' : 'negative');
+                        if (hasPnlData) {
+                            unrealizedPnlEl.textContent = `$${totalUnrealizedPnl.toFixed(2)}`;
+                            unrealizedPnlEl.className = 'metric-value ' + (totalUnrealizedPnl >= 0 ? 'positive' : 'negative');
+                        } else {
+                            unrealizedPnlEl.textContent = '--';
+                            unrealizedPnlEl.className = 'metric-value neutral';
+                        }
                     }
                     if (totalDeltaEl) {
-                        totalDeltaEl.textContent = `${totalDelta.toFixed(0)} SPY`;
+                        if (hasDeltaData) {
+                            totalDeltaEl.textContent = `${totalDelta.toFixed(0)} SPY`;
+                        } else {
+                            totalDeltaEl.textContent = '-- SPY';
+                        }
                     }
                     if (totalThetaEl) {
-                        totalThetaEl.textContent = `+$${totalTheta.toFixed(0)}/day`;
+                        if (hasDeltaData) {  // theta comes with delta
+                            totalThetaEl.textContent = `+$${totalTheta.toFixed(0)}/day`;
+                        } else {
+                            totalThetaEl.textContent = '--/day';
+                        }
                     }
                 } else if (snapshotSummary) {
                     // Use snapshot data for P&L and Greeks
