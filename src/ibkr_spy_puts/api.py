@@ -601,3 +601,103 @@ async def health():
         return {"status": "unhealthy", "error": str(e)}
     finally:
         db.disconnect()
+
+
+@app.get("/api/debug/margin-comparison")
+async def debug_margin_comparison():
+    """Compare margin calculation methods.
+
+    Compares:
+    1. Sum of individual whatIfOrder per position
+    2. Grouped whatIfOrder (all contracts of same strike at once)
+    """
+    import asyncio
+    import subprocess
+    import json
+
+    from ibkr_spy_puts.config import TWSSettings
+    tws_settings = TWSSettings()
+
+    script = f'''
+import json
+import asyncio
+asyncio.set_event_loop(asyncio.new_event_loop())
+from ib_insync import IB, MarketOrder
+from collections import defaultdict
+
+ib = IB()
+result = {{"individual": [], "grouped": [], "individual_total": 0, "grouped_total": 0}}
+
+try:
+    ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=94, readonly=True, timeout=15)
+
+    positions = ib.positions()
+    spy_puts = [p for p in positions if p.contract.symbol == "SPY"
+                and p.contract.secType == "OPT"
+                and getattr(p.contract, "right", "") == "P"
+                and p.position < 0]
+
+    result["position_count"] = len(spy_puts)
+
+    # Method 1: Individual whatIfOrder for each position
+    for pos in spy_puts:
+        c = pos.contract
+        qty = abs(int(pos.position))
+        qualified = ib.qualifyContracts(c)
+        if not qualified:
+            continue
+        order = MarketOrder("BUY", qty)
+        whatif = ib.whatIfOrder(qualified[0], order)
+        if whatif and whatif.maintMarginChange:
+            maint_change = float(whatif.maintMarginChange)
+            margin = -maint_change if maint_change < 0 else 0
+            result["individual"].append({{"strike": c.strike, "qty": qty, "margin": round(margin, 2)}})
+            result["individual_total"] += margin
+
+    # Method 2: Grouped by contract (close all of same strike at once)
+    grouped = defaultdict(int)
+    contracts_map = {{}}
+    for pos in spy_puts:
+        c = pos.contract
+        key = (c.lastTradeDateOrContractMonth, c.strike)
+        grouped[key] += abs(int(pos.position))
+        contracts_map[key] = c
+
+    for key, total_qty in grouped.items():
+        contract = contracts_map[key]
+        qualified = ib.qualifyContracts(contract)
+        if not qualified:
+            continue
+        order = MarketOrder("BUY", total_qty)
+        whatif = ib.whatIfOrder(qualified[0], order)
+        if whatif and whatif.maintMarginChange:
+            maint_change = float(whatif.maintMarginChange)
+            margin = -maint_change if maint_change < 0 else 0
+            result["grouped"].append({{"strike": contract.strike, "qty": total_qty, "margin": round(margin, 2)}})
+            result["grouped_total"] += margin
+
+    result["individual_total"] = round(result["individual_total"], 2)
+    result["grouped_total"] = round(result["grouped_total"], 2)
+    result["difference"] = round(abs(result["individual_total"] - result["grouped_total"]), 2)
+
+    ib.disconnect()
+except Exception as e:
+    result["error"] = str(e)
+
+print(json.dumps(result))
+'''
+
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            ["python", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return json.loads(proc.stdout.strip())
+        else:
+            return {"error": proc.stderr or "No output", "stdout": proc.stdout}
+    except Exception as e:
+        return {"error": str(e)}
