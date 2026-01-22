@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 from ibkr_spy_puts.config import (
-    BracketSettings,
+    ExitOrderSettings,
     StrategySettings,
     TWSSettings,
     get_settings,
@@ -109,9 +109,9 @@ Examples:
         help="Target delta (negative for puts, e.g., -0.15)",
     )
     parser.add_argument(
-        "--no-bracket",
+        "--no-exit-orders",
         action="store_true",
-        help="Disable bracket orders (take profit / stop loss)",
+        help="Disable exit orders (take profit / stop loss)",
     )
     parser.add_argument(
         "--run-now",
@@ -148,10 +148,10 @@ Examples:
         target_delta=args.target_delta or settings.strategy.target_delta,
     )
 
-    bracket_settings = BracketSettings(
-        enabled=not args.no_bracket and settings.bracket.enabled,
-        take_profit_pct=settings.bracket.take_profit_pct,
-        stop_loss_pct=settings.bracket.stop_loss_pct,
+    exit_settings = ExitOrderSettings(
+        enabled=not args.no_exit_orders and settings.exit_orders.enabled,
+        take_profit_pct=settings.exit_orders.take_profit_pct,
+        stop_loss_pct=settings.exit_orders.stop_loss_pct,
     )
 
     # Print configuration
@@ -170,11 +170,11 @@ Examples:
     print(f"  Target DTE: {strategy_settings.target_dte}")
     print(f"  Target Delta: {strategy_settings.target_delta}")
     print()
-    print("Bracket Settings:")
-    print(f"  Enabled: {bracket_settings.enabled}")
-    if bracket_settings.enabled:
-        print(f"  Take Profit: {bracket_settings.take_profit_pct}%")
-        print(f"  Stop Loss: {bracket_settings.stop_loss_pct}%")
+    print("Exit Order Settings:")
+    print(f"  Enabled: {exit_settings.enabled}")
+    if exit_settings.enabled:
+        print(f"  Take Profit: {exit_settings.take_profit_pct}%")
+        print(f"  Stop Loss: {exit_settings.stop_loss_pct}%")
     print("=" * 60)
     print()
 
@@ -194,7 +194,7 @@ Examples:
         strategy = PutSellingStrategy(
             client=client,
             strategy_settings=strategy_settings,
-            bracket_settings=bracket_settings,
+            exit_settings=exit_settings,
         )
 
         # Create trade order

@@ -90,6 +90,10 @@ class Database:
     def connect(self) -> bool:
         """Establish database connection.
 
+        Uses effective_name which selects database based on TRADING_MODE:
+        - paper mode -> ibkr_puts_paper
+        - live mode -> ibkr_puts
+
         Returns:
             True if connected successfully.
         """
@@ -97,7 +101,7 @@ class Database:
             self._conn = psycopg2.connect(
                 host=self.settings.host,
                 port=self.settings.port,
-                dbname=self.settings.name,
+                dbname=self.settings.effective_name,
                 user=self.settings.user,
                 password=self.settings.password,
             )

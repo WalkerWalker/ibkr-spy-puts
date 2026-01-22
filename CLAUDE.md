@@ -29,9 +29,9 @@ poetry run pytest tests/test_environment.py::TestPythonEnvironment::test_python_
 
 ### Configuration (`src/ibkr_spy_puts/config.py`)
 - Uses Pydantic Settings for configuration management
-- Three settings classes: `TWSSettings`, `DatabaseSettings`, `StrategySettings`
+- Settings classes: `TWSSettings`, `DatabaseSettings`, `StrategySettings`, `ExitOrderSettings`
 - Loads from `.env` file automatically
-- Environment variable prefixes: `TWS_`, `DB_` for respective settings
+- Environment variable prefixes: `TWS_`, `DB_`, `STRATEGY_`, `EXIT_` for respective settings
 
 ### IBKR Client (`src/ibkr_spy_puts/ibkr_client.py`)
 - Wrapper around ib_insync's `IB` class
@@ -79,13 +79,13 @@ curl -s http://localhost:8000/api/trade-history | python3 -m json.tool
 1. **Step 1: Place sell order**
    - Check for conflicting BUY orders on the same contract
    - If conflicts exist: cancel them temporarily
-   - Place parent SELL order
+   - Place SELL order using Adaptive algo
    - Wait for FILL
    - Re-place cancelled orders with their ORIGINAL OCA groups
 
-2. **Step 2: Place TP/SL orders**
-   - Only after parent is FILLED
-   - Create new OCA group for this trade's TP/SL
+2. **Step 2: Place exit orders (TP/SL)**
+   - Only after sell order is FILLED
+   - Create new OCA group for this trade's exit orders
    - Place limit order for take profit
    - Place stop order for stop loss
 

@@ -73,9 +73,11 @@ services:
     build: .
     container_name: ibkr-bot
     environment:
+      # Trading mode (paper or live) - determines database selection
+      TRADING_MODE: ${TRADING_MODE:-paper}
       # Connect to ib-gateway container via socat proxy
       TWS_HOST: ib-gateway
-      TWS_PORT: 4003  # Socat proxy port (relays to 127.0.0.1:4001)
+      TWS_PORT: ${TWS_DOCKER_PORT:-4003}  # Socat proxy: 4003 for live, 4004 for paper
       TWS_CLIENT_ID: ${TWS_CLIENT_ID:-1}
       # Connect to postgres container
       DB_HOST: postgres

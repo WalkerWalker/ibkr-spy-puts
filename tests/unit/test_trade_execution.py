@@ -1,16 +1,16 @@
-"""Unit tests for bracket order placement with conflicting order handling.
+"""Unit tests for trade execution with conflicting order handling.
 
-Tests the two-step logic in IBKRClient.place_bracket_order():
+Tests the two-step logic in IBKRClient.execute_trade():
 
-Step 1: Place parent order (with conflict handling)
+Step 1: Place sell order (with conflict handling)
   - Find conflicting orders on same contract
   - Cancel them temporarily
-  - Place parent SELL
-  - Wait for parent to FILL
+  - Place SELL order
+  - Wait for sell order to FILL
   - Re-place cancelled orders with ORIGINAL OCA groups
 
-Step 2: Place TP/SL orders (no conflict possible)
-  - No conflict detection needed (parent already filled)
+Step 2: Place exit orders (no conflict possible)
+  - No conflict detection needed (sell order already filled)
   - Place new TP/SL in a NEW OCA group
 """
 
@@ -18,7 +18,7 @@ from datetime import date
 from unittest.mock import MagicMock, patch, PropertyMock
 import pytest
 
-from ibkr_spy_puts.ibkr_client import IBKRClient, BracketOrderResult
+from ibkr_spy_puts.ibkr_client import IBKRClient, TradeResult
 
 
 class MockOrderStatus:
@@ -96,7 +96,7 @@ class TestStep1ConflictDetection:
             mock_ib.isConnected.return_value = True
             mock_ib.openTrades.return_value = [existing_tp, existing_sl, other_contract_order]
 
-            # Detect conflicting orders (same logic as in place_bracket_order)
+            # Detect conflicting orders (same logic as in execute_trade)
             opposite_action = "BUY"  # For SELL parent
             conflicting = []
             for trade in mock_ib.openTrades():
@@ -189,7 +189,7 @@ class TestStep1ReplaceCancelledOrders:
             },
         ]
 
-        # Group orders by their original OCA group (same logic as in place_bracket_order)
+        # Group orders by their original OCA group (same logic as in execute_trade)
         oca_groups: dict[str, list] = {}
         for conflict in conflicting_orders:
             oca = conflict["oca_group"] or "OCA_FALLBACK"
@@ -260,7 +260,7 @@ class TestStep2PlaceNewTPSL:
 
 
 class TestIntegration:
-    """Integration tests for the full place_bracket_order flow."""
+    """Integration tests for the full execute_trade flow."""
 
     @pytest.fixture
     def mock_ib(self):
@@ -273,8 +273,8 @@ class TestIntegration:
         mock.cancelOrder = MagicMock()
         return mock
 
-    def test_successful_bracket_order_no_conflicts(self, mock_ib):
-        """Test successful bracket order when no conflicting orders exist."""
+    def test_successful_trade_no_conflicts(self, mock_ib):
+        """Test successful trade execution when no conflicting orders exist."""
         client = IBKRClient()
         client.ib = mock_ib
 
@@ -298,7 +298,7 @@ class TestIntegration:
 
         mock_ib.placeOrder.side_effect = [parent_trade, tp_trade, sl_trade]
 
-        result = client.place_bracket_order(
+        result = client.execute_trade(
             contract=target_contract,
             action="SELL",
             quantity=1,
@@ -312,7 +312,7 @@ class TestIntegration:
         assert result.take_profit_order_id == 501
         assert result.stop_loss_order_id == 502
 
-    def test_bracket_order_with_conflicts_replaces_with_original_oca(self, mock_ib):
+    def test_trade_with_conflicts_replaces_with_original_oca(self, mock_ib):
         """Test that cancelled orders are re-placed with their original OCA groups."""
         client = IBKRClient()
         client.ib = mock_ib
@@ -372,7 +372,7 @@ class TestIntegration:
         cancelled_orders = []
         mock_ib.cancelOrder = lambda o: cancelled_orders.append(o.orderId)
 
-        result = client.place_bracket_order(
+        result = client.execute_trade(
             contract=target_contract,
             action="SELL",
             quantity=1,
@@ -419,7 +419,7 @@ class TestIntegration:
 
         mock_ib.placeOrder.return_value = sell_trade
 
-        result = client.place_bracket_order(
+        result = client.execute_trade(
             contract=target_contract,
             action="SELL",
             quantity=1,

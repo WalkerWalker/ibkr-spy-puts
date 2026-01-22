@@ -84,6 +84,31 @@ class MarketCalendar:
         # Fallback: return the next weekday
         return check_date
 
+    def is_market_open(self) -> bool:
+        """Check if NYSE market is currently open.
+
+        Market hours: 9:30 AM - 4:00 PM Eastern Time on trading days.
+
+        Returns:
+            True if market is currently open.
+        """
+        import pytz
+
+        # Get current time in Eastern timezone
+        eastern = pytz.timezone("America/New_York")
+        now = datetime.now(eastern)
+        today = now.date()
+
+        # Not a trading day (weekend or holiday)
+        if not self.is_trading_day(today):
+            return False
+
+        # Check market hours (9:30 AM - 4:00 PM ET)
+        market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+        return market_open <= now <= market_close
+
     def get_holidays(self, year: int) -> list[date]:
         """Get all market holidays for a year.
 
@@ -305,7 +330,7 @@ def create_trade_function(
     def trade():
         import asyncio
         from decimal import Decimal
-        from ibkr_spy_puts.config import BracketSettings, DatabaseSettings, TWSSettings
+        from ibkr_spy_puts.config import ExitOrderSettings, DatabaseSettings, TWSSettings
         from ibkr_spy_puts.database import Database, Position, Trade
         from ibkr_spy_puts.strategy import PutSellingStrategy
 
@@ -361,12 +386,12 @@ def create_trade_function(
                     logger.info(f"Using actual fill price: {entry_price} (limit was {trade_order.limit_price})")
 
                 # Recalculate TP/SL based on actual entry price
-                from ibkr_spy_puts.strategy import BracketPrices
-                bracket_settings = BracketSettings()
-                actual_bracket = BracketPrices.calculate(
+                from ibkr_spy_puts.strategy import ExitPrices
+                exit_settings = ExitOrderSettings()
+                actual_exit_prices = ExitPrices.calculate(
                     sell_price=entry_price,
-                    take_profit_pct=bracket_settings.take_profit_pct,
-                    stop_loss_pct=bracket_settings.stop_loss_pct,
+                    take_profit_pct=exit_settings.take_profit_pct,
+                    stop_loss_pct=exit_settings.stop_loss_pct,
                 )
 
                 # Extract commission and fill time
@@ -409,8 +434,8 @@ def create_trade_function(
                     quantity=trade_order.quantity,
                     entry_price=Decimal(str(entry_price)),
                     entry_time=fill_time,  # Use actual fill time from execution
-                    expected_tp_price=Decimal(str(actual_bracket.take_profit_price)),
-                    expected_sl_price=Decimal(str(actual_bracket.stop_loss_price)),
+                    expected_tp_price=Decimal(str(actual_exit_prices.take_profit_price)),
+                    expected_sl_price=Decimal(str(actual_exit_prices.stop_loss_price)),
                     status="OPEN",
                     strategy_id="spy-put-selling",
                 )

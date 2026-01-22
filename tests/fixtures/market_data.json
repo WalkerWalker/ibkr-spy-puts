@@ -2,7 +2,7 @@
   "captured_at": "2026-01-12T21:19:33.856426",
   "symbol": "SPY",
   "target_dte": 90,
-  "spy_price": null,
+  "spy_price": 595.255,
   "account_summary": {
     "AccountType": "INDIVIDUAL",
     "Cushion": "1",

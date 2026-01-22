@@ -92,24 +92,34 @@ async def get_positions():
 async def get_positions_live():
     """Get all open positions enriched with live IBKR data (price, Greeks, P&L).
 
-    If live data is unavailable (market closed), returns snapshot data from last market close.
+    If market is closed, skips IBKR requests entirely and returns snapshot data.
     Response includes metadata indicating if data is live or from snapshot.
     """
     import asyncio
+    from ibkr_spy_puts.scheduler import MarketCalendar
 
     db = get_db()
     try:
         positions = db.get_positions_for_display()
 
-        # Fetch live data from IBKR via subprocess
-        live_data = await asyncio.to_thread(_fetch_live_position_data, positions)
+        # Check if market is open FIRST
+        calendar = MarketCalendar()
+        market_is_open = calendar.is_market_open()
 
-        # Check if we got any live data
-        has_live_data = bool(live_data) and not live_data.get('error')
+        # If market is closed, skip IBKR requests entirely
+        if not market_is_open:
+            live_data = {}
+            has_live_data = False
+        else:
+            # Market is open - fetch live data from IBKR via subprocess
+            live_data = await asyncio.to_thread(_fetch_live_position_data, positions)
 
-        # Count positions with actual Greeks data
-        positions_with_greeks = sum(1 for v in live_data.values() if isinstance(v, dict) and v.get('delta') is not None)
-        has_live_data = positions_with_greeks > 0
+            # Check if we got any live data
+            has_live_data = bool(live_data) and not live_data.get('error')
+
+            # Count positions with actual Greeks data
+            positions_with_greeks = sum(1 for v in live_data.values() if isinstance(v, dict) and v.get('delta') is not None)
+            has_live_data = positions_with_greeks > 0
 
         # If no live data, get latest snapshot for summary metrics
         snapshot = None
@@ -160,6 +170,7 @@ async def get_positions_live():
         response = {
             "positions": serialize_decimal(enriched),
             "data_source": "live" if has_live_data else "snapshot",
+            "market_open": market_is_open,
             "snapshot_time": serialize_decimal(snapshot_time) if snapshot_time else None,
         }
 
@@ -179,7 +190,12 @@ async def get_positions_live():
 
 
 def _fetch_live_position_data(positions: list) -> dict:
-    """Fetch live data for positions from IBKR."""
+    """Fetch live data for positions from IBKR.
+
+    Uses parallel requests: qualify all contracts, request all market data
+    simultaneously, wait once, then collect results. Much faster than
+    sequential per-contract requests.
+    """
     import subprocess
     import json
 
@@ -206,6 +222,7 @@ def _fetch_live_position_data(positions: list) -> dict:
 
     contracts_json = json.dumps(contracts_info)
 
+    # Parallel market data fetching script
     script = f'''
 import json
 import asyncio
@@ -221,46 +238,61 @@ try:
 
     contracts_info = {contracts_json}
 
+    # PHASE 1: Create all option contracts
+    options = []
     for info in contracts_info:
-        key = f"{{info['symbol']}}_{{int(info['strike'])}}_{{info['expiration']}}"
-
         opt = Option(info['symbol'], info['expiration'], info['strike'], 'P', 'SMART')
-        qualified = ib.qualifyContracts(opt)
+        options.append(opt)
 
-        if qualified:
-            ticker = ib.reqMktData(qualified[0], '106', False, False)
-            ib.sleep(2)
+    # PHASE 2: Qualify all contracts at once
+    qualified = ib.qualifyContracts(*options)
 
-            data = {{}}
-            if ticker.bid and ticker.bid > 0:
-                data['bid'] = ticker.bid
-            if ticker.ask and ticker.ask > 0:
-                data['ask'] = ticker.ask
-            if data.get('bid') and data.get('ask'):
-                data['mid'] = (data['bid'] + data['ask']) / 2
+    # PHASE 3: Request market data for ALL contracts simultaneously
+    tickers = []
+    for opt in qualified:
+        ticker = ib.reqMktData(opt, '106', False, False)
+        tickers.append((opt, ticker))
 
-            if ticker.modelGreeks:
-                g = ticker.modelGreeks
-                data['delta'] = g.delta
-                data['theta'] = g.theta
-                data['gamma'] = g.gamma
-                data['vega'] = g.vega
-                data['iv'] = g.impliedVol
+    # PHASE 4: Wait ONCE for all data (5 seconds instead of 2 per contract)
+    ib.sleep(5)
 
-            ib.cancelMktData(qualified[0])
+    # PHASE 5: Collect results
+    for opt, ticker in tickers:
+        key = f"{{opt.symbol}}_{{int(opt.strike)}}_{{opt.lastTradeDateOrContractMonth}}"
+        data = {{}}
 
-            # Get margin for this position using whatIfOrder (1 contract at a time)
-            try:
-                order = MarketOrder("BUY", 1)  # Simulate closing 1 contract
-                whatif = ib.whatIfOrder(qualified[0], order)
-                if whatif and whatif.maintMarginChange:
-                    maint_change = float(whatif.maintMarginChange)
-                    # Negative change means margin would be released (currently used)
-                    data['margin'] = -maint_change if maint_change < 0 else 0
-            except:
-                pass
+        if ticker.bid and ticker.bid > 0:
+            data['bid'] = ticker.bid
+        if ticker.ask and ticker.ask > 0:
+            data['ask'] = ticker.ask
+        if data.get('bid') and data.get('ask'):
+            data['mid'] = (data['bid'] + data['ask']) / 2
 
-            result[key] = data
+        if ticker.modelGreeks:
+            g = ticker.modelGreeks
+            data['delta'] = g.delta
+            data['theta'] = g.theta
+            data['gamma'] = g.gamma
+            data['vega'] = g.vega
+            data['iv'] = g.impliedVol
+
+        result[key] = data
+
+    # PHASE 6: Cancel market data subscriptions
+    for opt, ticker in tickers:
+        ib.cancelMktData(opt)
+
+    # PHASE 7: Get margin for each position
+    for opt, ticker in tickers:
+        key = f"{{opt.symbol}}_{{int(opt.strike)}}_{{opt.lastTradeDateOrContractMonth}}"
+        try:
+            order = MarketOrder("BUY", 1)
+            whatif = ib.whatIfOrder(opt, order)
+            if whatif and whatif.maintMarginChange:
+                maint_change = float(whatif.maintMarginChange)
+                result[key]['margin'] = -maint_change if maint_change < 0 else 0
+        except:
+            pass
 
     ib.disconnect()
 except Exception as e:

@@ -2,7 +2,7 @@
 
 This module contains the core logic for:
 - Selecting the appropriate put option based on DTE and delta
-- Creating and placing orders with bracket (take profit / stop loss)
+- Placing sell orders with exit orders (take profit / stop loss) in OCA group
 - Tracking trade execution
 """
 
@@ -10,13 +10,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from ibkr_spy_puts.config import BracketSettings, StrategySettings
-from ibkr_spy_puts.ibkr_client import BracketOrderResult, OptionContract
+from ibkr_spy_puts.config import ExitOrderSettings, StrategySettings
+from ibkr_spy_puts.ibkr_client import TradeResult as IBKRTradeResult, OptionContract
 
 
 @dataclass
-class BracketPrices:
-    """Calculated bracket order prices."""
+class ExitPrices:
+    """Calculated exit order prices (take profit and stop loss)."""
 
     sell_price: float  # Price we're selling the put at
     take_profit_price: float  # Buy back price for profit (lower)
@@ -28,8 +28,8 @@ class BracketPrices:
         sell_price: float,
         take_profit_pct: float,
         stop_loss_pct: float,
-    ) -> "BracketPrices":
-        """Calculate bracket prices from sell price and percentages.
+    ) -> "ExitPrices":
+        """Calculate exit prices from sell price and percentages.
 
         Args:
             sell_price: The price we're selling the put at.
@@ -37,7 +37,7 @@ class BracketPrices:
             stop_loss_pct: Loss percentage (e.g., 200 = stop at 200% loss).
 
         Returns:
-            BracketPrices with calculated take profit and stop loss.
+            ExitPrices with calculated take profit and stop loss.
 
         Example:
             sell_price = 1.00, take_profit_pct = 60, stop_loss_pct = 200
@@ -63,7 +63,7 @@ class TradeOrder:
     quantity: int
     order_type: str  # "LMT" or "MKT"
     limit_price: float | None
-    bracket_prices: BracketPrices | None
+    exit_prices: ExitPrices | None
 
 
 @dataclass
@@ -103,7 +103,7 @@ class IBKRClientProtocol(Protocol):
         use_delayed: bool = True,
     ) -> OptionContract | None: ...
 
-    def place_bracket_order(
+    def execute_trade(
         self,
         contract: any,
         action: str,
@@ -112,30 +112,30 @@ class IBKRClientProtocol(Protocol):
         take_profit_price: float,
         stop_loss_price: float,
         use_aggressive_fill: bool = False,
-    ) -> BracketOrderResult: ...
+    ) -> IBKRTradeResult: ...
 
     def restore_cancelled_orders(self, cancelled_orders: list) -> bool: ...
 
 
 class PutSellingStrategy:
-    """Strategy for selling puts on SPY with bracket orders."""
+    """Strategy for selling puts on SPY with exit orders (TP/SL)."""
 
     def __init__(
         self,
         client: IBKRClientProtocol,
         strategy_settings: StrategySettings | None = None,
-        bracket_settings: BracketSettings | None = None,
+        exit_settings: ExitOrderSettings | None = None,
     ):
         """Initialize the strategy.
 
         Args:
             client: IBKR client (real or mock).
             strategy_settings: Strategy configuration.
-            bracket_settings: Bracket order configuration.
+            exit_settings: Exit order configuration (TP/SL).
         """
         self.client = client
         self.strategy = strategy_settings or StrategySettings()
-        self.bracket = bracket_settings or BracketSettings()
+        self.exit_orders = exit_settings or ExitOrderSettings()
 
     def select_option(self) -> OptionContract | None:
         """Select the put option to sell based on strategy settings.
@@ -172,19 +172,19 @@ class PutSellingStrategy:
 
         raise ValueError("Option has no price data")
 
-    def calculate_bracket_prices(self, sell_price: float) -> BracketPrices:
-        """Calculate bracket order prices.
+    def calculate_exit_prices(self, sell_price: float) -> ExitPrices:
+        """Calculate exit order prices (TP/SL).
 
         Args:
             sell_price: The price we're selling the put at.
 
         Returns:
-            BracketPrices with take profit and stop loss.
+            ExitPrices with take profit and stop loss.
         """
-        return BracketPrices.calculate(
+        return ExitPrices.calculate(
             sell_price=sell_price,
-            take_profit_pct=self.bracket.take_profit_pct,
-            stop_loss_pct=self.bracket.stop_loss_pct,
+            take_profit_pct=self.exit_orders.take_profit_pct,
+            stop_loss_pct=self.exit_orders.stop_loss_pct,
         )
 
     def create_trade_order(self) -> TradeOrder | None:
@@ -201,16 +201,16 @@ class PutSellingStrategy:
         # Calculate prices
         if self.strategy.order_type == "MKT":
             limit_price = None
-            # For bracket calculation, use mid price as estimate
+            # For exit price calculation, use mid price as estimate
             sell_price = option.mid or option.bid or 0
         else:
             limit_price = self.calculate_limit_price(option)
             sell_price = limit_price
 
-        # Calculate bracket prices if enabled
-        bracket_prices = None
-        if self.bracket.enabled and sell_price > 0:
-            bracket_prices = self.calculate_bracket_prices(sell_price)
+        # Calculate exit prices if enabled
+        exit_prices = None
+        if self.exit_orders.enabled and sell_price > 0:
+            exit_prices = self.calculate_exit_prices(sell_price)
 
         return TradeOrder(
             option=option,
@@ -218,7 +218,7 @@ class PutSellingStrategy:
             quantity=self.strategy.quantity,
             order_type=self.strategy.order_type,
             limit_price=limit_price,
-            bracket_prices=bracket_prices,
+            exit_prices=exit_prices,
         )
 
     def execute_trade(self, order: TradeOrder, dry_run: bool = False) -> TradeResult:
@@ -242,15 +242,15 @@ class PutSellingStrategy:
                 timestamp=datetime.now(),
             )
 
-        # Validate we have bracket prices if bracket is enabled
-        if self.bracket.enabled and order.bracket_prices is None:
+        # Validate we have exit prices if exit orders are enabled
+        if self.exit_orders.enabled and order.exit_prices is None:
             return TradeResult(
                 success=False,
                 order_id=None,
                 sell_order_id=None,
                 take_profit_order_id=None,
                 stop_loss_order_id=None,
-                message="Bracket enabled but no bracket prices calculated",
+                message="Exit orders enabled but no exit prices calculated",
                 timestamp=datetime.now(),
             )
 
@@ -267,15 +267,15 @@ class PutSellingStrategy:
             )
 
         try:
-            if self.bracket.enabled and order.bracket_prices:
-                # Place sell order with TP/SL
-                result = self.client.place_bracket_order(
+            if self.exit_orders.enabled and order.exit_prices:
+                # Place sell order, then exit orders (TP/SL) after fill
+                result = self.client.execute_trade(
                     contract=order.option.contract,
                     action=order.action,
                     quantity=order.quantity,
-                    limit_price=order.limit_price or order.bracket_prices.sell_price,
-                    take_profit_price=order.bracket_prices.take_profit_price,
-                    stop_loss_price=order.bracket_prices.stop_loss_price,
+                    limit_price=order.limit_price or order.exit_prices.sell_price,
+                    take_profit_price=order.exit_prices.take_profit_price,
+                    stop_loss_price=order.exit_prices.stop_loss_price,
                     use_aggressive_fill=self.strategy.use_aggressive_fill,
                 )
 
@@ -290,7 +290,7 @@ class PutSellingStrategy:
                         sell_order_id=result.sell_order_id,
                         take_profit_order_id=result.take_profit_order_id,
                         stop_loss_order_id=result.stop_loss_order_id,
-                        message="Order placed successfully with TP/SL",
+                        message="Order placed successfully with exit orders",
                         timestamp=datetime.now(),
                         fill_price=fill_price,
                         cancelled_orders=result.cancelled_orders,
@@ -309,7 +309,7 @@ class PutSellingStrategy:
                         cancelled_orders=result.cancelled_orders,
                     )
             else:
-                # Place single order (no bracket)
+                # Place single order (no exit orders)
                 # This would need place_single_order implementation
                 return TradeResult(
                     success=False,
@@ -317,7 +317,7 @@ class PutSellingStrategy:
                     sell_order_id=None,
                     take_profit_order_id=None,
                     stop_loss_order_id=None,
-                    message="Single order (non-bracket) not yet implemented",
+                    message="Single order (no exit orders) not yet implemented",
                     timestamp=datetime.now(),
                 )
 
@@ -464,15 +464,15 @@ class PutSellingStrategy:
         if order.option.bid and order.option.ask:
             lines.append(f"Market: ${order.option.bid:.2f} / ${order.option.ask:.2f}")
 
-        if order.bracket_prices:
+        if order.exit_prices:
             lines.extend([
                 "",
-                "BRACKET ORDERS:",
-                f"  Sell at: ${order.bracket_prices.sell_price:.2f}",
-                f"  Take Profit: Buy back at ${order.bracket_prices.take_profit_price:.2f} "
-                f"({self.bracket.take_profit_pct}% profit)",
-                f"  Stop Loss: Buy back at ${order.bracket_prices.stop_loss_price:.2f} "
-                f"({self.bracket.stop_loss_pct}% max loss)",
+                "EXIT ORDERS:",
+                f"  Sell at: ${order.exit_prices.sell_price:.2f}",
+                f"  Take Profit: Buy back at ${order.exit_prices.take_profit_price:.2f} "
+                f"({self.exit_orders.take_profit_pct}% profit)",
+                f"  Stop Loss: Buy back at ${order.exit_prices.stop_loss_price:.2f} "
+                f"({self.exit_orders.stop_loss_pct}% max loss)",
             ])
 
         lines.append("=" * 60)

@@ -199,8 +199,8 @@ class TestFindPutByDelta:
             assert put_10.strike <= put_20.strike <= put_30.strike
 
 
-class TestBracketPriceCalculation:
-    """Test bracket order price calculations."""
+class TestExitPriceCalculation:
+    """Test exit order price calculations."""
 
     def test_take_profit_price_calculation(self):
         """Calculate take profit buy-back price."""
@@ -222,8 +222,8 @@ class TestBracketPriceCalculation:
 
         assert buy_back_price == pytest.approx(3.00)
 
-    def test_bracket_prices_with_real_option_price(self):
-        """Calculate bracket prices using mock option data."""
+    def test_exit_prices_with_real_option_price(self):
+        """Calculate exit prices using mock option data."""
         with MockIBKRClient(fixtures_dir=FIXTURES_DIR) as client:
             put = client.find_put_by_delta(target_delta=-0.15, target_dte=90)
             assert put is not None

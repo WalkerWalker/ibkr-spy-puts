@@ -3,6 +3,14 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+class TradingModeSettings(BaseSettings):
+    """Trading mode detection (paper vs live)."""
+
+    model_config = SettingsConfigDict(env_prefix="TRADING_")
+
+    mode: str = "live"  # "paper" or "live"
+
+
 class TWSSettings(BaseSettings):
     """TWS/IB Gateway connection settings."""
 
@@ -29,9 +37,22 @@ class DatabaseSettings(BaseSettings):
     password: str = ""
 
     @property
+    def effective_name(self) -> str:
+        """Get database name based on trading mode.
+
+        Returns:
+            - 'ibkr_puts_paper' for paper trading mode
+            - 'ibkr_puts' (or DB_NAME value) for live trading mode
+        """
+        mode = TradingModeSettings().mode.lower()
+        if mode == "paper":
+            return f"{self.name}_paper"
+        return self.name
+
+    @property
     def connection_string(self) -> str:
         """Generate PostgreSQL connection string."""
-        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.name}"
+        return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.effective_name}"
 
 
 class StrategySettings(BaseSettings):
@@ -58,12 +79,15 @@ class StrategySettings(BaseSettings):
     strike_offset_pct: float = 2.0  # % below current price (alternative to delta)
 
 
-class BracketSettings(BaseSettings):
-    """Bracket order settings for automatic profit taking and stop loss."""
+class ExitOrderSettings(BaseSettings):
+    """Exit order settings for automatic profit taking and stop loss.
 
-    model_config = SettingsConfigDict(env_prefix="BRACKET_")
+    After a sell order is filled, exit orders (TP + SL) are placed in an OCA group.
+    """
 
-    enabled: bool = True  # Enable/disable automatic bracket orders
+    model_config = SettingsConfigDict(env_prefix="EXIT_")
+
+    enabled: bool = True  # Enable/disable automatic exit orders
 
     # Take profit: % of premium to capture before closing
     # 60% means buy back at 40% of original premium (e.g., sold for $1, buy back at $0.40)
@@ -96,7 +120,7 @@ class Settings(BaseSettings):
     tws: TWSSettings = TWSSettings()
     database: DatabaseSettings = DatabaseSettings()
     strategy: StrategySettings = StrategySettings()
-    bracket: BracketSettings = BracketSettings()
+    exit_orders: ExitOrderSettings = ExitOrderSettings()
     schedule: ScheduleSettings = ScheduleSettings()
 
 

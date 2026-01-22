@@ -24,12 +24,12 @@ class OptionContract:
 
 
 @dataclass
-class BracketOrderResult:
-    """Result of placing a sell order with TP/SL.
+class TradeResult:
+    """Result of executing a trade (sell order + exit orders).
 
     Two-step process:
-    1. Place sell order (handle conflicts)
-    2. After fill, place TP/SL orders in OCA group
+    1. Place sell order (handle conflicts with existing orders)
+    2. After sell order fills, place exit orders (TP/SL) in OCA group
     """
 
     success: bool
@@ -421,62 +421,7 @@ class IBKRClient:
 
         return closest
 
-    def create_bracket_order(
-        self,
-        action: str,
-        quantity: int,
-        limit_price: float,
-        take_profit_price: float,
-        stop_loss_price: float,
-    ) -> tuple[Order, Order, Order]:
-        """Create a bracket order (parent + take profit + stop loss).
-
-        Manually creates orders with explicit transmit flags to ensure
-        proper transmission to IB.
-
-        Args:
-            action: "BUY" or "SELL" for the parent order.
-            quantity: Number of contracts.
-            limit_price: Limit price for parent order.
-            take_profit_price: Price for take profit order (opposite side).
-            stop_loss_price: Price for stop loss order (opposite side).
-
-        Returns:
-            Tuple of (parent_order, take_profit_order, stop_loss_order).
-        """
-        # Get the opposite action for child orders
-        opposite_action = "BUY" if action == "SELL" else "SELL"
-
-        # Create parent order (entry) - transmit=False to wait for children
-        parent = LimitOrder(
-            action=action,
-            totalQuantity=quantity,
-            lmtPrice=limit_price,
-            transmit=False,
-        )
-
-        # Create take profit order - transmit=False to wait for stop loss
-        take_profit = LimitOrder(
-            action=opposite_action,
-            totalQuantity=quantity,
-            lmtPrice=take_profit_price,
-            transmit=False,
-            parentId=parent.orderId,
-        )
-
-        # Create stop loss order - transmit=True to send all orders
-        stop_loss = Order(
-            orderType="STP",
-            action=opposite_action,
-            totalQuantity=quantity,
-            auxPrice=stop_loss_price,
-            transmit=True,
-            parentId=parent.orderId,
-        )
-
-        return parent, take_profit, stop_loss
-
-    def place_bracket_order(
+    def execute_trade(
         self,
         contract: Contract,
         action: str,
@@ -485,12 +430,12 @@ class IBKRClient:
         take_profit_price: float,
         stop_loss_price: float,
         use_aggressive_fill: bool = False,
-    ) -> BracketOrderResult:
-        """Place a sell order with TP/SL orders after fill.
+    ) -> TradeResult:
+        """Execute a trade: place sell order, then exit orders (TP/SL) after fill.
 
         Two-step process:
         Step 1: Place sell order (cancel any conflicting BUY orders on same contract)
-        Step 2: After fill, place TP/SL orders in a new OCA group
+        Step 2: After sell order fills, place exit orders (TP/SL) in a new OCA group
 
         Args:
             contract: The contract to trade (e.g., Option).
@@ -502,10 +447,10 @@ class IBKRClient:
             use_aggressive_fill: If True, use Urgent priority (paper trading).
 
         Returns:
-            BracketOrderResult with order IDs and trade objects.
+            TradeResult with order IDs and trade objects.
         """
         if not self.is_connected:
-            return BracketOrderResult(
+            return TradeResult(
                 success=False,
                 error_message="Not connected to TWS",
             )
@@ -574,7 +519,7 @@ class IBKRClient:
 
                 if remaining_conflicts:
                     logger.error(f"Orders still active after cancel: {remaining_conflicts}")
-                    return BracketOrderResult(
+                    return TradeResult(
                         success=False,
                         error_message=f"Cannot cancel conflicting orders: {remaining_conflicts}",
                     )
@@ -638,7 +583,7 @@ class IBKRClient:
             if not order_filled:
                 logger.warning(f"Sell order not filled, status: {order_status}")
                 # Return with cancelled_orders so scheduler can retry or restore them
-                return BracketOrderResult(
+                return TradeResult(
                     success=False,
                     error_message=f"Sell order not filled within {max_wait_seconds}s, status: {order_status}. Retry or restore cancelled orders.",
                     sell_order_id=sell_trade.order.orderId,
@@ -739,14 +684,14 @@ class IBKRClient:
 
             if not orders_success:
                 logger.error(f"TP/SL order placement failed! TP status: {take_profit_trade.orderStatus.status}, SL status: {stop_loss_trade.orderStatus.status}")
-                return BracketOrderResult(
+                return TradeResult(
                     success=False,
                     error_message=f"TP/SL orders failed - TP: {take_profit_trade.orderStatus.status}, SL: {stop_loss_trade.orderStatus.status}",
                     sell_order_id=sell_trade.order.orderId,
                     sell_trade=sell_trade,
                 )
 
-            return BracketOrderResult(
+            return TradeResult(
                 success=True,
                 sell_order_id=sell_trade.order.orderId,
                 take_profit_order_id=take_profit_trade.order.orderId,
@@ -760,7 +705,7 @@ class IBKRClient:
             )
 
         except Exception as e:
-            return BracketOrderResult(
+            return TradeResult(
                 success=False,
                 error_message=str(e),
             )

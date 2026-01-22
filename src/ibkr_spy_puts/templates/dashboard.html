@@ -808,16 +808,26 @@
 
                 // Update last fetch time with data source indicator
                 const updateEl = document.getElementById('positions-last-update');
+                const marketOpen = data.market_open;
                 if (updateEl) {
-                    if (hasLiveData) {
+                    if (marketOpen && hasLiveData) {
                         updateEl.textContent = `Live Data - Updated ${new Date().toLocaleTimeString()}`;
                         updateEl.style.color = '#00ff88';
+                    } else if (marketOpen === false) {
+                        // Market is closed
+                        if (snapshotTime) {
+                            const snapDate = new Date(snapshotTime);
+                            updateEl.textContent = `Market Closed - Snapshot from ${snapDate.toLocaleDateString()}`;
+                        } else {
+                            updateEl.textContent = `Market Closed (${new Date().toLocaleTimeString()})`;
+                        }
+                        updateEl.style.color = '#ffaa00';
                     } else if (snapshotTime) {
                         const snapDate = new Date(snapshotTime);
-                        updateEl.textContent = `Snapshot from ${snapDate.toLocaleString()} (Market Closed)`;
+                        updateEl.textContent = `Using Snapshot from ${snapDate.toLocaleString()}`;
                         updateEl.style.color = '#ffaa00';
                     } else {
-                        updateEl.textContent = `Market Closed - No Data (${new Date().toLocaleTimeString()})`;
+                        updateEl.textContent = `No Data Available (${new Date().toLocaleTimeString()})`;
                         updateEl.style.color = '#888';
                     }
                 }

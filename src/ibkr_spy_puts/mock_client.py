@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from ibkr_spy_puts.ibkr_client import BracketOrderResult, OptionContract
+from ibkr_spy_puts.ibkr_client import TradeResult, OptionContract
 
 
 # Default fixtures directory
@@ -254,7 +254,7 @@ class MockIBKRClient:
 
         return closest
 
-    def place_bracket_order(
+    def execute_trade(
         self,
         contract: Any,
         action: str,
@@ -263,22 +263,22 @@ class MockIBKRClient:
         take_profit_price: float,
         stop_loss_price: float,
         use_aggressive_fill: bool = False,
-    ) -> BracketOrderResult:
-        """Simulate placing a bracket order.
+    ) -> TradeResult:
+        """Simulate executing a trade (sell order + exit orders).
 
         Args:
             contract: The contract to trade (ignored in mock).
             action: "BUY" or "SELL".
             quantity: Number of contracts.
-            limit_price: Limit price for parent order.
+            limit_price: Limit price for sell order.
             take_profit_price: Price for take profit order.
             stop_loss_price: Price for stop loss order.
 
         Returns:
-            BracketOrderResult with simulated order IDs.
+            TradeResult with simulated order IDs.
         """
         if not self._connected:
-            return BracketOrderResult(
+            return TradeResult(
                 success=False,
                 error_message="Not connected",
             )
@@ -287,7 +287,7 @@ class MockIBKRClient:
         import random
         base_id = random.randint(10000, 99999)
 
-        return BracketOrderResult(
+        return TradeResult(
             success=True,
             sell_order_id=base_id,
             take_profit_order_id=base_id + 1,

@@ -204,34 +204,24 @@ ibkr-spy-puts/
 - [ ] Cancel the other bracket order (OCO)
 - [ ] Mark cancelled order as "CANCELLED"
 
-### 5.4 Bracket Orders (Auto-Exit)
+### 5.4 Exit Orders (Auto-Exit with TP/SL)
 
-**IMPORTANT: Test bracket orders manually in TWS before coding the API implementation.**
-IBKR recommends testing order types in the UI first to confirm they work as expected.
+**Two-Step Process:**
+1. Place sell order (with conflict handling)
+2. After sell order fills, place exit orders (TP + SL) in OCA group
 
-**Approach:** Use IBKR's native bracket order via `ib.bracketOrder()`:
-- Parent order: SELL put (open short position)
-- Take profit: BUY limit at lower price (close at profit)
-- Stop loss: BUY stop at higher price (close to cut losses)
-- Native OCO: When one child fills, IBKR automatically cancels the other
-- Atomic submission: All three orders submitted together, children activate only after parent fills
-
-**Configuration (from BracketSettings):**
-- `BRACKET_TAKE_PROFIT_PCT=60.0` → Buy back at 40% of premium (60% profit)
-- `BRACKET_STOP_LOSS_PCT=200.0` → Buy back at 300% of premium (200% loss)
-- `BRACKET_ENABLED=true` → Enable/disable bracket orders
+**Configuration (from ExitOrderSettings):**
+- `EXIT_TAKE_PROFIT_PCT=60.0` → Buy back at 40% of premium (60% profit)
+- `EXIT_STOP_LOSS_PCT=200.0` → Buy back at 300% of premium (200% loss)
+- `EXIT_ENABLED=true` → Enable/disable exit orders
 
 **Implementation Tasks:**
-- [x] **Manual TWS Test**: Test bracket order on a put option in TWS UI (paper account)
-  - Verified SELL put as parent works
-  - Verified take profit (BUY limit) and stop loss (BUY stop) attach correctly
-  - Verified OCO behavior (one fills, other cancels)
-- [x] Implement `create_bracket_order()` using `ib.bracketOrder()`
+- [x] Implement `execute_trade()` for two-step process
 - [x] Calculate take profit price: `sell_price * (1 - take_profit_pct / 100)`
 - [x] Calculate stop loss price: `sell_price * (1 + stop_loss_pct / 100)`
-- [x] Submit all three orders atomically with proper `transmit` flag handling
-- [ ] Log bracket transactions to database (linked via parent_order_id)
-- [ ] Handle partial fills and bracket order adjustments
+- [x] Place exit orders in new OCA group after sell fills
+- [ ] Log transactions to database (linked via sell_order_id)
+- [ ] Handle partial fills and order adjustments
 
 ### 5.5 Position Management
 - [ ] Track open positions
@@ -269,14 +259,14 @@ STRATEGY_ORDER_TYPE=LMT          # LMT or MKT
 STRATEGY_TARGET_DTE=90           # Target days to expiration (closest to this)
 STRATEGY_TARGET_DELTA=-0.15      # Target delta (closest to this, negative for puts)
 
-# Bracket Order Parameters (prefix: BRACKET_)
+# Exit Order Parameters (prefix: EXIT_)
 # Take profit: % of premium to capture before closing
 # 60% means buy back at 40% of original premium (sold $1, buy back $0.40)
-BRACKET_TAKE_PROFIT_PCT=60.0
+EXIT_TAKE_PROFIT_PCT=60.0
 # Stop loss: % of premium loss before closing
 # 200% means buy back at 300% of original (sold $1, buy back $3, losing $2)
-BRACKET_STOP_LOSS_PCT=200.0
-BRACKET_ENABLED=true
+EXIT_STOP_LOSS_PCT=200.0
+EXIT_ENABLED=true
 
 # Scheduling (prefix: SCHEDULE_)
 SCHEDULE_TRADE_AT_OPEN=true      # Trade at market open
@@ -316,7 +306,7 @@ tests/
 │   └── spy_option_chain.json
 ├── unit/                        # Use MockIBKRClient, always run
 │   ├── test_option_selection.py
-│   ├── test_bracket_calculation.py
+│   ├── test_trade_execution.py
 │   └── test_strategy.py
 └── integration/                 # Use real IBKRClient, skip if no TWS
     ├── test_tws_connection.py
@@ -327,7 +317,7 @@ tests/
 
 - [ ] Unit tests for strategy calculations (offline, mock data)
 - [ ] Unit tests for option selection logic (offline, mock data)
-- [ ] Unit tests for bracket price calculations (offline, mock data)
+- [ ] Unit tests for exit price calculations (offline, mock data)
 - [ ] Integration tests with TWS paper trading
 - [ ] Test database operations
 - [ ] Test order submission in paper account
@@ -474,12 +464,12 @@ GET  /health                 # Health check for monitoring
 |----------|--------|------|-------|
 | Language | Python | 2025-12-19 | ib_insync is mature, faster development |
 | Package Manager | Poetry | 2025-12-19 | Still modern, user is familiar with it |
-| Bracket Orders | Native IBKR | 2026-01-11 | Use `ib.bracketOrder()` for OCO logic; IBKR handles parent→children activation and OCO cancellation natively |
+| Exit Orders | Two-step process | 2026-01-11 | Sell order first, then TP/SL in OCA group after fill |
 | Offline Testing | Mock Fixtures | 2026-01-11 | Capture real option chain data during market hours, save as JSON fixtures for offline development and unit tests |
 | Scheduling | APScheduler | 2026-01-11 | Internal Python scheduler; container runs 24/7 with IB Gateway; simpler than AWS ECS scheduled tasks |
 | Deployment | Docker + EC2 | 2026-01-11 | Single container with IB Gateway + bot + scheduler + FastAPI dashboard |
 | Order Execution | Adaptive Algo | 2026-01-12 | Use IBKR Adaptive Algo with "Normal" priority for better fills; timeout safety net at 5 min |
-| First Live Trade | SUCCESS | 2026-01-12 | SPY Apr17'26 $630 Put bracket order filled at $5.59 |
+| First Live Trade | SUCCESS | 2026-01-12 | SPY Apr17'26 $630 Put order filled at $5.59 |
 
 ---
 

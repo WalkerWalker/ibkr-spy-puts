@@ -8,13 +8,13 @@
 - **FR1.3**: Select strike closest to -0.15 delta
 - **FR1.4**: Support limit orders with configurable offset
 
-### FR2: Automatic Exit (Bracket Orders)
-- **FR2.1**: After put is sold, automatically place take-profit order
+### FR2: Automatic Exit Orders
+- **FR2.1**: After sell order fills, automatically place take-profit order
   - Default: Close position when 60% of premium is captured (buy back at 40% of original)
-- **FR2.2**: After put is sold, automatically place stop-loss order
+- **FR2.2**: After sell order fills, automatically place stop-loss order
   - Default: Close position when loss reaches 200% of premium (buy back at 300% of original)
-- **FR2.3**: Bracket orders should be OCO (One-Cancels-Other)
-- **FR2.4**: All bracket parameters must be configurable
+- **FR2.3**: Exit orders (TP/SL) should be in OCA group (One-Cancels-All)
+- **FR2.4**: All exit order parameters must be configurable
 
 ### FR3: Transaction Logging
 - **FR3.1**: Store all trade transactions in PostgreSQL database
@@ -29,7 +29,7 @@
   - TWS connection (host, port, client ID)
   - Database connection
   - Strategy (symbol, quantity, target DTE, target delta)
-  - Bracket orders (take profit %, stop loss %, enabled/disabled)
+  - Exit orders (take profit %, stop loss %, enabled/disabled)
   - Schedule (trade time, timezone)
 
 ### FR5: TWS Integration
@@ -52,17 +52,17 @@
   - Handle partial fills appropriately
 
 ### FR7: Post-Fill Workflow
-- **FR7.1**: After parent order fills, record transaction to database
+- **FR7.1**: After sell order fills, record transaction to database
   - Store: order ID, symbol, strike, expiration, fill price, fill time
-  - Store: bracket order IDs (take profit, stop loss)
-- **FR7.2**: Monitor bracket orders for fills
+  - Store: exit order IDs (take profit, stop loss)
+- **FR7.2**: Monitor exit orders for fills
   - When take profit or stop loss fills, record exit transaction
   - Calculate and store realized P&L
 - **FR7.3**: Handle order modifications
   - Log any order amendments or cancellations
 
 ### FR8: Conflicting Order Handling
-When placing a new bracket order, existing orders on the opposite side of the same contract may conflict.
+When placing a new sell order, existing orders on the opposite side of the same contract may conflict.
 
 - **FR8.1**: Before placing new orders, detect conflicting orders
   - Sync all open orders from IB (including from other client sessions)
@@ -71,9 +71,9 @@ When placing a new bracket order, existing orders on the opposite side of the sa
   - Save order details (type, price, quantity, OCA group, etc.)
   - Cancel conflicting orders using `globalCancel` if needed
   - Wait and verify cancellation succeeded before proceeding
-- **FR8.3**: Execute new bracket order
-  - Place parent order with bracket (take profit + stop loss)
-  - All bracket child orders should be in an OCA group
+- **FR8.3**: Execute trade
+  - Place sell order using Adaptive algo
+  - After sell order fills, place exit orders (TP + SL) in a new OCA group
 - **FR8.4**: Restore cancelled orders
   - Re-place previously cancelled orders with same parameters
   - Maintain OCA grouping for related orders
@@ -131,9 +131,9 @@ When placing a new bracket order, existing orders on the opposite side of the sa
 | `STRATEGY_QUANTITY` | 1 | Contracts per trade |
 | `STRATEGY_TARGET_DTE` | 90 | Target days to expiration |
 | `STRATEGY_TARGET_DELTA` | -0.15 | Target delta for strike selection |
-| `BRACKET_ENABLED` | true | Enable bracket orders |
-| `BRACKET_TAKE_PROFIT_PCT` | 60.0 | Take profit at 60% gain |
-| `BRACKET_STOP_LOSS_PCT` | 200.0 | Stop loss at 200% loss |
+| `EXIT_ENABLED` | true | Enable exit orders (TP/SL) |
+| `EXIT_TAKE_PROFIT_PCT` | 60.0 | Take profit at 60% gain |
+| `EXIT_STOP_LOSS_PCT` | 200.0 | Stop loss at 200% loss |
 | `SCHEDULE_TRADE_AT_OPEN` | true | Trade at market open |
 | `SCHEDULE_TRADE_TIME` | 09:30 | Trade time (ET) |
 | `TWS_PORT` | 7496 | TWS live trading port |
@@ -150,7 +150,7 @@ When placing a new bracket order, existing orders on the opposite side of the sa
 The database must track all trades executed by this strategy, separate from other account activity.
 
 - **DR1.1**: Each strategy execution (daily) creates one "trade" record
-- **DR1.2**: Trades are linked to their bracket orders (parent, TP, SL)
+- **DR1.2**: Trades are linked to their exit orders (TP, SL)
 - **DR1.3**: Strategy trades are identifiable by a unique strategy tag/ID
 - **DR1.4**: Support querying: "Show all trades from this strategy"
 
@@ -160,7 +160,7 @@ Track all orders placed by the strategy with their lifecycle.
 - **DR2.1**: Store order details: symbol, strike, expiration, quantity, prices
 - **DR2.2**: Track order status: PENDING → FILLED / CANCELLED / EXPIRED
 - **DR2.3**: Record expected price vs actual fill price (slippage tracking)
-- **DR2.4**: Link bracket orders to parent via relationship
+- **DR2.4**: Link exit orders to sell order via relationship
 - **DR2.5**: Store IBKR order IDs for reconciliation with live account
 
 ### DR3: Position Tracking
@@ -199,7 +199,7 @@ The database must support these frontend queries efficiently:
 
 - **DR6.1**: List all strategy trades (paginated, filterable by date)
 - **DR6.2**: List open positions with current greeks and unrealized P&L
-- **DR6.3**: List pending bracket orders
+- **DR6.3**: List pending exit orders
 - **DR6.4**: Show realized P&L summary (daily, weekly, monthly, all-time)
 - **DR6.5**: Show risk metrics dashboard (max loss, live delta/theta)
 - **DR6.6**: Show trade details with entry, exit, slippage analysis
@@ -324,9 +324,9 @@ WHERE strategy_id = 'spy-put-selling';
 | Project setup | 2025-12-19 | Poetry, Python 3.11, initial structure |
 | TWS connection | 2025-12-19 | Connect/disconnect, account summary |
 | Mock client | 2026-01-12 | Offline development with fixture data |
-| Strategy core | 2026-01-12 | Option selection, bracket price calc |
+| Strategy core | 2026-01-12 | Option selection, exit price calc |
 | Scheduler | 2026-01-12 | APScheduler with NYSE holiday calendar |
-| First live order | 2026-01-12 | SPY Apr17'26 $630P bracket order filled! |
+| First live order | 2026-01-12 | SPY Apr17'26 $630P order filled! |
 | Scheduler --run-now | 2026-01-13 | Added immediate execution flag |
 | Conflicting order handling | 2026-01-13 | globalCancel + OCA group restore |
 | Dashboard improvements | 2026-01-13 | Entry date, DIT column, removed ID |

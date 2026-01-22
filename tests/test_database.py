@@ -46,9 +46,30 @@ class TestDatabaseConnection:
             pytest.skip("Database not available")
 
     def test_connection_string(self, db_settings):
-        """Test connection string generation."""
-        expected = "postgresql://ibkr:ibkr_dev_password@localhost:5432/ibkr_puts"
+        """Test connection string generation.
+
+        The connection string uses effective_name which depends on TRADING_MODE:
+        - paper mode -> ibkr_puts_paper
+        - live mode -> ibkr_puts
+        """
+        # Connection string should use effective_name (mode-aware)
+        effective_name = db_settings.effective_name
+        expected = f"postgresql://ibkr:ibkr_dev_password@localhost:5432/{effective_name}"
         assert db_settings.connection_string == expected
+
+    def test_effective_name_based_on_trading_mode(self, db_settings, monkeypatch):
+        """Test that effective_name changes based on TRADING_MODE."""
+        import os
+
+        # Test paper mode
+        monkeypatch.setenv("TRADING_MODE", "paper")
+        settings_paper = DatabaseSettings(name="ibkr_puts")
+        assert settings_paper.effective_name == "ibkr_puts_paper"
+
+        # Test live mode
+        monkeypatch.setenv("TRADING_MODE", "live")
+        settings_live = DatabaseSettings(name="ibkr_puts")
+        assert settings_live.effective_name == "ibkr_puts"
 
 
 class TestTradeOperations:

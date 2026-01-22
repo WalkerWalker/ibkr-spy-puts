@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from ibkr_spy_puts.config import BracketSettings, StrategySettings
+from ibkr_spy_puts.config import ExitOrderSettings, StrategySettings
 from ibkr_spy_puts.mock_client import MockIBKRClient
 from ibkr_spy_puts.strategy import (
-    BracketPrices,
+    ExitPrices,
     PutSellingStrategy,
     TradeOrder,
 )
@@ -21,12 +21,12 @@ from ibkr_spy_puts.strategy import (
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
 
 
-class TestBracketPrices:
-    """Test bracket price calculations."""
+class TestExitPrices:
+    """Test exit price calculations."""
 
-    def test_calculate_standard_bracket(self):
-        """Test standard 60% profit / 200% loss bracket."""
-        prices = BracketPrices.calculate(
+    def test_calculate_standard_exit_prices(self):
+        """Test standard 60% profit / 200% loss exit prices."""
+        prices = ExitPrices.calculate(
             sell_price=1.00,
             take_profit_pct=60.0,
             stop_loss_pct=200.0,
@@ -38,7 +38,7 @@ class TestBracketPrices:
 
     def test_calculate_with_different_percentages(self):
         """Test with different profit/loss percentages."""
-        prices = BracketPrices.calculate(
+        prices = ExitPrices.calculate(
             sell_price=2.00,
             take_profit_pct=50.0,  # 50% profit
             stop_loss_pct=100.0,  # 100% loss
@@ -50,7 +50,7 @@ class TestBracketPrices:
 
     def test_calculate_small_premium(self):
         """Test with small premium amounts."""
-        prices = BracketPrices.calculate(
+        prices = ExitPrices.calculate(
             sell_price=0.50,
             take_profit_pct=60.0,
             stop_loss_pct=200.0,
@@ -72,7 +72,7 @@ class TestPutSellingStrategy:
             assert strategy.strategy.symbol == "SPY"
             assert strategy.strategy.target_dte == 90
             assert strategy.strategy.target_delta == -0.15
-            assert strategy.bracket.enabled is True
+            assert strategy.exit_orders.enabled is True
 
     def test_strategy_with_custom_settings(self):
         """Test strategy with custom settings."""
@@ -82,7 +82,7 @@ class TestPutSellingStrategy:
             target_dte=45,
             target_delta=-0.20,
         )
-        custom_bracket = BracketSettings(
+        custom_exit = ExitOrderSettings(
             take_profit_pct=50.0,
             stop_loss_pct=150.0,
         )
@@ -91,13 +91,13 @@ class TestPutSellingStrategy:
             strategy = PutSellingStrategy(
                 client,
                 strategy_settings=custom_strategy,
-                bracket_settings=custom_bracket,
+                exit_settings=custom_exit,
             )
 
             assert strategy.strategy.quantity == 2
             assert strategy.strategy.target_dte == 45
             assert strategy.strategy.target_delta == -0.20
-            assert strategy.bracket.take_profit_pct == 50.0
+            assert strategy.exit_orders.take_profit_pct == 50.0
 
     def test_select_option(self):
         """Test option selection."""
@@ -121,20 +121,19 @@ class TestPutSellingStrategy:
 
             limit_price = strategy.calculate_limit_price(option)
 
-            # Limit price should be mid minus offset
-            expected = option.mid - strategy.strategy.limit_offset
-            assert limit_price == pytest.approx(expected, rel=0.01)
+            # Limit price should be mid price (no offset, fill speed controlled by Adaptive algo)
+            assert limit_price == pytest.approx(option.mid, rel=0.01)
 
-    def test_calculate_bracket_prices(self):
-        """Test bracket price calculation."""
+    def test_calculate_exit_prices(self):
+        """Test exit price calculation."""
         with MockIBKRClient(fixtures_dir=FIXTURES_DIR) as client:
             strategy = PutSellingStrategy(client)
 
-            bracket = strategy.calculate_bracket_prices(1.00)
+            exit_prices = strategy.calculate_exit_prices(1.00)
 
-            assert bracket.sell_price == 1.00
-            assert bracket.take_profit_price == pytest.approx(0.40)
-            assert bracket.stop_loss_price == pytest.approx(3.00)
+            assert exit_prices.sell_price == 1.00
+            assert exit_prices.take_profit_price == pytest.approx(0.40)
+            assert exit_prices.stop_loss_price == pytest.approx(3.00)
 
     def test_create_trade_order(self):
         """Test creating a trade order."""
@@ -149,34 +148,34 @@ class TestPutSellingStrategy:
             assert order.order_type == "LMT"
             assert order.limit_price is not None
             assert order.limit_price > 0
-            assert order.bracket_prices is not None
+            assert order.exit_prices is not None
 
-    def test_create_trade_order_with_bracket(self):
-        """Test trade order includes bracket prices."""
+    def test_create_trade_order_with_exit_prices(self):
+        """Test trade order includes exit prices."""
         with MockIBKRClient(fixtures_dir=FIXTURES_DIR) as client:
             strategy = PutSellingStrategy(client)
 
             order = strategy.create_trade_order()
 
             assert order is not None
-            assert order.bracket_prices is not None
-            assert order.bracket_prices.take_profit_price < order.bracket_prices.sell_price
-            assert order.bracket_prices.stop_loss_price > order.bracket_prices.sell_price
+            assert order.exit_prices is not None
+            assert order.exit_prices.take_profit_price < order.exit_prices.sell_price
+            assert order.exit_prices.stop_loss_price > order.exit_prices.sell_price
 
-    def test_create_trade_order_bracket_disabled(self):
-        """Test trade order without bracket."""
-        custom_bracket = BracketSettings(enabled=False)
+    def test_create_trade_order_exit_disabled(self):
+        """Test trade order without exit orders."""
+        custom_exit = ExitOrderSettings(enabled=False)
 
         with MockIBKRClient(fixtures_dir=FIXTURES_DIR) as client:
             strategy = PutSellingStrategy(
                 client,
-                bracket_settings=custom_bracket,
+                exit_settings=custom_exit,
             )
 
             order = strategy.create_trade_order()
 
             assert order is not None
-            assert order.bracket_prices is None
+            assert order.exit_prices is None
 
 
 class TestStrategyExecution:
@@ -273,24 +272,24 @@ class TestStrategyWithDifferentSettings:
             assert order.order_type == "MKT"
             assert order.limit_price is None
 
-    def test_aggressive_bracket_settings(self):
-        """Test strategy with aggressive bracket settings."""
-        custom_bracket = BracketSettings(
+    def test_aggressive_exit_settings(self):
+        """Test strategy with aggressive exit settings."""
+        custom_exit = ExitOrderSettings(
             take_profit_pct=80.0,  # Take 80% profit
             stop_loss_pct=100.0,  # Stop at 100% loss
         )
 
         with MockIBKRClient(fixtures_dir=FIXTURES_DIR) as client:
-            strategy = PutSellingStrategy(client, bracket_settings=custom_bracket)
+            strategy = PutSellingStrategy(client, exit_settings=custom_exit)
             order = strategy.create_trade_order()
 
             assert order is not None
-            assert order.bracket_prices is not None
+            assert order.exit_prices is not None
 
             # With 80% profit, buy back at 20% of sell price
-            expected_tp = order.bracket_prices.sell_price * 0.20
-            assert order.bracket_prices.take_profit_price == pytest.approx(expected_tp, rel=0.01)
+            expected_tp = order.exit_prices.sell_price * 0.20
+            assert order.exit_prices.take_profit_price == pytest.approx(expected_tp, rel=0.01)
 
             # With 100% loss, buy back at 200% of sell price
-            expected_sl = order.bracket_prices.sell_price * 2.00
-            assert order.bracket_prices.stop_loss_price == pytest.approx(expected_sl, rel=0.01)
+            expected_sl = order.exit_prices.sell_price * 2.00
+            assert order.exit_prices.stop_loss_price == pytest.approx(expected_sl, rel=0.01)
