@@ -72,13 +72,15 @@ class TradeResult:
 
     success: bool
     order_id: int | None
-    parent_order_id: int | None
+    sell_order_id: int | None
     take_profit_order_id: int | None
     stop_loss_order_id: int | None
     message: str
     timestamp: datetime
     fill_price: float | None = None
     cancelled_orders: list | None = None  # Orders cancelled for conflict, to be restored
+    commission: float | None = None  # Commission from the trade
+    sell_trade: any = None  # The IB Trade object for accessing fill details
 
 
 class IBKRClientProtocol(Protocol):
@@ -233,7 +235,7 @@ class PutSellingStrategy:
             return TradeResult(
                 success=True,
                 order_id=None,
-                parent_order_id=None,
+                sell_order_id=None,
                 take_profit_order_id=None,
                 stop_loss_order_id=None,
                 message="DRY RUN - Order not placed",
@@ -245,7 +247,7 @@ class PutSellingStrategy:
             return TradeResult(
                 success=False,
                 order_id=None,
-                parent_order_id=None,
+                sell_order_id=None,
                 take_profit_order_id=None,
                 stop_loss_order_id=None,
                 message="Bracket enabled but no bracket prices calculated",
@@ -257,7 +259,7 @@ class PutSellingStrategy:
             return TradeResult(
                 success=False,
                 order_id=None,
-                parent_order_id=None,
+                sell_order_id=None,
                 take_profit_order_id=None,
                 stop_loss_order_id=None,
                 message="Limit order requires limit price",
@@ -266,7 +268,7 @@ class PutSellingStrategy:
 
         try:
             if self.bracket.enabled and order.bracket_prices:
-                # Place bracket order (parent + take profit + stop loss)
+                # Place sell order with TP/SL
                 result = self.client.place_bracket_order(
                     contract=order.option.contract,
                     action=order.action,
@@ -278,29 +280,31 @@ class PutSellingStrategy:
                 )
 
                 if result.success:
-                    # Extract fill price from parent trade if available
+                    # Extract fill price from sell trade if available
                     fill_price = result.fill_price
-                    if not fill_price and result.parent_trade and result.parent_trade.orderStatus.avgFillPrice:
-                        fill_price = result.parent_trade.orderStatus.avgFillPrice
+                    if not fill_price and result.sell_trade and result.sell_trade.orderStatus.avgFillPrice:
+                        fill_price = result.sell_trade.orderStatus.avgFillPrice
                     return TradeResult(
                         success=True,
-                        order_id=result.parent_order_id,
-                        parent_order_id=result.parent_order_id,
+                        order_id=result.sell_order_id,
+                        sell_order_id=result.sell_order_id,
                         take_profit_order_id=result.take_profit_order_id,
                         stop_loss_order_id=result.stop_loss_order_id,
-                        message="Bracket order placed successfully",
+                        message="Order placed successfully with TP/SL",
                         timestamp=datetime.now(),
                         fill_price=fill_price,
                         cancelled_orders=result.cancelled_orders,
+                        commission=result.commission,
+                        sell_trade=result.sell_trade,
                     )
                 else:
                     return TradeResult(
                         success=False,
                         order_id=None,
-                        parent_order_id=result.parent_order_id,
+                        sell_order_id=result.sell_order_id,
                         take_profit_order_id=None,
                         stop_loss_order_id=None,
-                        message=f"Bracket order failed: {result.error_message}",
+                        message=f"Order failed: {result.error_message}",
                         timestamp=datetime.now(),
                         cancelled_orders=result.cancelled_orders,
                     )
@@ -310,7 +314,7 @@ class PutSellingStrategy:
                 return TradeResult(
                     success=False,
                     order_id=None,
-                    parent_order_id=None,
+                    sell_order_id=None,
                     take_profit_order_id=None,
                     stop_loss_order_id=None,
                     message="Single order (non-bracket) not yet implemented",
@@ -321,7 +325,7 @@ class PutSellingStrategy:
             return TradeResult(
                 success=False,
                 order_id=None,
-                parent_order_id=None,
+                sell_order_id=None,
                 take_profit_order_id=None,
                 stop_loss_order_id=None,
                 message=f"Order execution error: {e}",
@@ -354,7 +358,7 @@ class PutSellingStrategy:
             return None, TradeResult(
                 success=False,
                 order_id=None,
-                parent_order_id=None,
+                sell_order_id=None,
                 take_profit_order_id=None,
                 stop_loss_order_id=None,
                 message="Client not connected",
@@ -380,7 +384,7 @@ class PutSellingStrategy:
                 return None, TradeResult(
                     success=False,
                     order_id=None,
-                    parent_order_id=None,
+                    sell_order_id=None,
                     take_profit_order_id=None,
                     stop_loss_order_id=None,
                     message="No suitable option found",
@@ -426,7 +430,7 @@ class PutSellingStrategy:
         return last_order, TradeResult(
             success=False,
             order_id=None,
-            parent_order_id=last_result.parent_order_id if last_result else None,
+            sell_order_id=last_result.sell_order_id if last_result else None,
             take_profit_order_id=None,
             stop_loss_order_id=None,
             message=f"Failed after {max_retries} attempts: {last_result.message if last_result else 'Unknown error'}",

@@ -289,10 +289,10 @@ class MockIBKRClient:
 
         return BracketOrderResult(
             success=True,
-            parent_order_id=base_id,
+            sell_order_id=base_id,
             take_profit_order_id=base_id + 1,
             stop_loss_order_id=base_id + 2,
-            parent_trade=None,  # No real trade objects in mock
+            sell_trade=None,  # No real trade objects in mock
             take_profit_trade=None,
             stop_loss_trade=None,
         )

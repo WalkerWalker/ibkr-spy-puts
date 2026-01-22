@@ -308,7 +308,7 @@ class TestIntegration:
         )
 
         assert result.success is True
-        assert result.parent_order_id == 500
+        assert result.sell_order_id == 500
         assert result.take_profit_order_id == 501
         assert result.stop_loss_order_id == 502
 
@@ -387,8 +387,8 @@ class TestIntegration:
 
         assert result.success is True
 
-    def test_parent_not_filled_still_replaces_cancelled_orders(self, mock_ib):
-        """If parent doesn't fill, cancelled orders should STILL be re-placed."""
+    def test_sell_order_not_filled_returns_cancelled_orders(self, mock_ib):
+        """If sell order doesn't fill, cancelled orders are returned for caller to restore."""
         client = IBKRClient()
         client.ib = mock_ib
 
@@ -410,23 +410,14 @@ class TestIntegration:
 
         mock_ib.openTrades.side_effect = open_trades_side_effect
 
-        # Parent never fills
-        parent_trade = MockTrade(
+        # Sell order never fills
+        sell_trade = MockTrade(
             target_contract,
             MockOrder(order_id=500, action="SELL", lmt_price=5.89),
             MockOrderStatus("Submitted"),  # Never changes to Filled
         )
 
-        # Track what orders were placed
-        placed_orders = []
-        def track_place_order(contract, order):
-            placed_orders.append(order)
-            if len(placed_orders) == 1:
-                return parent_trade
-            # Re-placed order
-            return MockTrade(contract, order, MockOrderStatus("Submitted"))
-
-        mock_ib.placeOrder.side_effect = track_place_order
+        mock_ib.placeOrder.return_value = sell_trade
 
         result = client.place_bracket_order(
             contract=target_contract,
@@ -437,10 +428,11 @@ class TestIntegration:
             stop_loss_price=17.67,
         )
 
-        # Should fail because parent didn't fill
+        # Should fail because sell order didn't fill
         assert result.success is False
         assert "not filled" in result.error_message.lower()
 
-        # But cancelled orders should have been re-placed (orders placed after parent)
-        # First order is parent, subsequent orders are re-placements
-        assert len(placed_orders) >= 2  # At least parent + 1 re-placed order
+        # Cancelled orders should be returned for caller to restore
+        assert result.cancelled_orders is not None
+        assert len(result.cancelled_orders) == 1
+        assert result.cancelled_orders[0]["order"].orderId == 100

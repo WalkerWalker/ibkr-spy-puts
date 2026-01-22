@@ -202,7 +202,7 @@ class TestStrategyExecution:
 
             assert order is not None
             assert result.success is True
-            assert result.parent_order_id is not None
+            assert result.sell_order_id is not None
             assert result.take_profit_order_id is not None
             assert result.stop_loss_order_id is not None
 

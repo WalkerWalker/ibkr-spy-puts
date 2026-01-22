@@ -378,9 +378,9 @@ def create_trade_function(
                     commission = Decimal(str(result.commission))
                     logger.info(f"Commission from result: ${commission}")
 
-                # Extract fill time from parent_trade
-                if result.parent_trade and result.parent_trade.fills:
-                    fill = result.parent_trade.fills[0]
+                # Extract fill time from sell_trade
+                if result.sell_trade and result.sell_trade.fills:
+                    fill = result.sell_trade.fills[0]
                     if fill.time:
                         fill_time = fill.time
                         logger.info(f"Fill time from execution: {fill_time}")

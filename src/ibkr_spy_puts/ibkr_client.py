@@ -25,13 +25,18 @@ class OptionContract:
 
 @dataclass
 class BracketOrderResult:
-    """Result of placing a bracket order."""
+    """Result of placing a sell order with TP/SL.
+
+    Two-step process:
+    1. Place sell order (handle conflicts)
+    2. After fill, place TP/SL orders in OCA group
+    """
 
     success: bool
-    parent_order_id: int | None = None
+    sell_order_id: int | None = None
     take_profit_order_id: int | None = None
     stop_loss_order_id: int | None = None
-    parent_trade: Trade | None = None
+    sell_trade: Trade | None = None
     take_profit_trade: Trade | None = None
     stop_loss_trade: Trade | None = None
     error_message: str | None = None
@@ -481,17 +486,17 @@ class IBKRClient:
         stop_loss_price: float,
         use_aggressive_fill: bool = False,
     ) -> BracketOrderResult:
-        """Place a bracket order for a contract.
+        """Place a sell order with TP/SL orders after fill.
 
-        This is a two-step process:
-        Step 1: Place parent order (handling any conflicting orders)
-        Step 2: Place TP/SL orders (no conflict possible since parent filled)
+        Two-step process:
+        Step 1: Place sell order (cancel any conflicting BUY orders on same contract)
+        Step 2: After fill, place TP/SL orders in a new OCA group
 
         Args:
             contract: The contract to trade (e.g., Option).
-            action: "BUY" or "SELL" for the parent order.
+            action: "BUY" or "SELL" for the sell order.
             quantity: Number of contracts.
-            limit_price: Limit price for parent order.
+            limit_price: Limit price for sell order.
             take_profit_price: Price for take profit order.
             stop_loss_price: Price for stop loss order.
             use_aggressive_fill: If True, use Urgent priority (paper trading).
@@ -511,7 +516,7 @@ class IBKRClient:
 
         try:
             # =================================================================
-            # STEP 1: Place parent order (with conflict handling)
+            # STEP 1: Place sell order (with conflict handling)
             # =================================================================
             opposite_action = "BUY" if action == "SELL" else "SELL"
 
@@ -575,69 +580,69 @@ class IBKRClient:
                     )
                 logger.info("All conflicting orders successfully cancelled")
 
-            # Place parent order with Adaptive algo
-            parent = LimitOrder(
+            # Place sell order with Adaptive algo
+            sell_order = LimitOrder(
                 action=action,
                 totalQuantity=quantity,
                 lmtPrice=limit_price,
                 tif="DAY",
                 transmit=True,
             )
-            parent.algoStrategy = "Adaptive"
+            sell_order.algoStrategy = "Adaptive"
             adaptive_priority = "Urgent" if use_aggressive_fill else "Normal"
-            parent.algoParams = [TagValue("adaptivePriority", adaptive_priority)]
+            sell_order.algoParams = [TagValue("adaptivePriority", adaptive_priority)]
             logger.info(f"Using Adaptive algo with {adaptive_priority} priority")
 
-            parent_trade = self.ib.placeOrder(contract, parent)
-            logger.info(f"Parent order placed with ID: {parent_trade.order.orderId}")
+            sell_trade = self.ib.placeOrder(contract, sell_order)
+            logger.info(f"Sell order placed with ID: {sell_trade.order.orderId}")
             self.ib.sleep(2)
 
-            # Wait for parent to FILL (10s timeout - scheduler will retry if needed)
+            # Wait for sell order to FILL (10s timeout - scheduler will retry if needed)
             max_wait_seconds = 10
             poll_interval = 2
             waited = 0
-            parent_filled = False
-            parent_status = ""
+            order_filled = False
+            order_status = ""
 
             while waited < max_wait_seconds:
                 self.ib.reqAllOpenOrders()
                 self.ib.sleep(poll_interval)
                 waited += poll_interval
-                parent_status = parent_trade.orderStatus.status
-                logger.info(f"Parent order status after {waited}s: {parent_status}")
+                order_status = sell_trade.orderStatus.status
+                logger.info(f"Sell order status after {waited}s: {order_status}")
 
-                if parent_status == "Filled":
-                    parent_filled = True
+                if order_status == "Filled":
+                    order_filled = True
                     break
-                elif parent_status in ["Cancelled", "ApiCancelled", "Inactive"]:
-                    logger.error(f"Parent order was cancelled/rejected: {parent_status}")
+                elif order_status in ["Cancelled", "ApiCancelled", "Inactive"]:
+                    logger.error(f"Sell order was cancelled/rejected: {order_status}")
                     break
 
             # If not filled within timeout, cancel the order
-            if not parent_filled and parent_status == "Submitted":
-                logger.info(f"Parent order not filled after {max_wait_seconds}s, cancelling for retry...")
-                self.ib.cancelOrder(parent_trade.order)
+            if not order_filled and order_status == "Submitted":
+                logger.info(f"Sell order not filled after {max_wait_seconds}s, cancelling for retry...")
+                self.ib.cancelOrder(sell_trade.order)
                 self.ib.sleep(3)
                 # Verify cancelled - and check if it filled during cancel!
                 self.ib.reqAllOpenOrders()
                 self.ib.sleep(2)
-                parent_status = parent_trade.orderStatus.status
-                logger.info(f"After cancel attempt, parent order status: {parent_status}")
+                order_status = sell_trade.orderStatus.status
+                logger.info(f"After cancel attempt, sell order status: {order_status}")
 
                 # Check if it actually filled during the cancel process (race condition)
-                if parent_status == "Filled":
+                if order_status == "Filled":
                     logger.info("Order filled during cancel process - treating as success")
-                    parent_filled = True
+                    order_filled = True
 
-            # Check if parent filled
-            if not parent_filled:
-                logger.warning(f"Parent order not filled, status: {parent_status}")
+            # Check if sell order filled
+            if not order_filled:
+                logger.warning(f"Sell order not filled, status: {order_status}")
                 # Return with cancelled_orders so scheduler can retry or restore them
                 return BracketOrderResult(
                     success=False,
-                    error_message=f"Parent order not filled within {max_wait_seconds}s, status: {parent_status}. Retry or restore cancelled orders.",
-                    parent_order_id=parent_trade.order.orderId,
-                    parent_trade=parent_trade,
+                    error_message=f"Sell order not filled within {max_wait_seconds}s, status: {order_status}. Retry or restore cancelled orders.",
+                    sell_order_id=sell_trade.order.orderId,
+                    sell_trade=sell_trade,
                     cancelled_orders=conflicting_orders,  # Pass back for retry/restore
                 )
 
@@ -654,18 +659,18 @@ class IBKRClient:
             # Try to get commission from ib.fills() which is more reliable
             for fill in self.ib.fills():
                 if (fill.contract.conId == contract.conId and
-                    fill.execution.orderId == parent_trade.order.orderId):
+                    fill.execution.orderId == sell_trade.order.orderId):
                     if fill.commissionReport and fill.commissionReport.commission:
                         commission = float(fill.commissionReport.commission)
                         logger.info(f"Commission from fill: ${commission:.4f}")
                     break
 
-            # Fallback: check parent_trade.fills
-            if commission is None and parent_trade.fills:
-                fill = parent_trade.fills[0]
+            # Fallback: check sell_trade.fills
+            if commission is None and sell_trade.fills:
+                fill = sell_trade.fills[0]
                 if fill.commissionReport and fill.commissionReport.commission:
                     commission = float(fill.commissionReport.commission)
-                    logger.info(f"Commission from parent_trade.fills: ${commission:.4f}")
+                    logger.info(f"Commission from sell_trade.fills: ${commission:.4f}")
 
             if commission is None:
                 logger.warning("Commission not available yet - will be 0 in trade log")
@@ -680,9 +685,9 @@ class IBKRClient:
 
             # Use fill price for TP/SL calculation
             actual_entry_price = limit_price
-            if parent_trade.orderStatus.avgFillPrice > 0:
-                actual_entry_price = parent_trade.orderStatus.avgFillPrice
-                logger.info(f"Parent filled at {actual_entry_price} (limit was {limit_price})")
+            if sell_trade.orderStatus.avgFillPrice > 0:
+                actual_entry_price = sell_trade.orderStatus.avgFillPrice
+                logger.info(f"Sell order filled at {actual_entry_price} (limit was {limit_price})")
 
             # Calculate TP/SL prices based on fill price
             actual_tp_price = round(actual_entry_price * 0.4, 2)  # 60% profit
@@ -721,32 +726,32 @@ class IBKRClient:
             self.ib.reqAllOpenOrders()
             self.ib.sleep(2)
 
-            logger.info(f"Parent order {parent_trade.order.orderId}: status={parent_trade.orderStatus.status}")
+            logger.info(f"Sell order {sell_trade.order.orderId}: status={sell_trade.orderStatus.status}")
             logger.info(f"Take profit order {take_profit_trade.order.orderId}: status={take_profit_trade.orderStatus.status}")
             logger.info(f"Stop loss order {stop_loss_trade.order.orderId}: status={stop_loss_trade.orderStatus.status}")
 
             valid_statuses = ["Submitted", "PreSubmitted", "PendingSubmit", "Filled"]
-            bracket_success = (
-                parent_trade.orderStatus.status in valid_statuses and
+            orders_success = (
+                sell_trade.orderStatus.status in valid_statuses and
                 take_profit_trade.orderStatus.status in valid_statuses and
                 stop_loss_trade.orderStatus.status in valid_statuses
             )
 
-            if not bracket_success:
-                logger.error(f"Bracket order failed! TP status: {take_profit_trade.orderStatus.status}, SL status: {stop_loss_trade.orderStatus.status}")
+            if not orders_success:
+                logger.error(f"TP/SL order placement failed! TP status: {take_profit_trade.orderStatus.status}, SL status: {stop_loss_trade.orderStatus.status}")
                 return BracketOrderResult(
                     success=False,
                     error_message=f"TP/SL orders failed - TP: {take_profit_trade.orderStatus.status}, SL: {stop_loss_trade.orderStatus.status}",
-                    parent_order_id=parent_trade.order.orderId,
-                    parent_trade=parent_trade,
+                    sell_order_id=sell_trade.order.orderId,
+                    sell_trade=sell_trade,
                 )
 
             return BracketOrderResult(
                 success=True,
-                parent_order_id=parent_trade.order.orderId,
+                sell_order_id=sell_trade.order.orderId,
                 take_profit_order_id=take_profit_trade.order.orderId,
                 stop_loss_order_id=stop_loss_trade.order.orderId,
-                parent_trade=parent_trade,
+                sell_trade=sell_trade,
                 take_profit_trade=take_profit_trade,
                 stop_loss_trade=stop_loss_trade,
                 fill_price=actual_entry_price,

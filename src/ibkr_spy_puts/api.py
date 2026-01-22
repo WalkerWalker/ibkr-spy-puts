@@ -18,8 +18,22 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from ibkr_spy_puts.config import DatabaseSettings
+
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    """Add no-cache headers to prevent browser caching."""
+
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        # Don't cache API responses or dashboard
+        if request.url.path.startswith("/api") or request.url.path == "/":
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
 from ibkr_spy_puts.database import Database
 
 # Initialize FastAPI
@@ -28,6 +42,9 @@ app = FastAPI(
     description="Monitor your put selling strategy",
     version="1.0.0",
 )
+
+# Add no-cache middleware
+app.add_middleware(NoCacheMiddleware)
 
 # Templates directory
 templates_dir = Path(__file__).parent / "templates"

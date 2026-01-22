@@ -226,8 +226,8 @@ Examples:
         print("Result:")
         print(f"  Success: {result.success}")
         print(f"  Message: {result.message}")
-        if result.parent_order_id:
-            print(f"  Parent Order ID: {result.parent_order_id}")
+        if result.sell_order_id:
+            print(f"  Sell Order ID: {result.sell_order_id}")
         if result.take_profit_order_id:
             print(f"  Take Profit Order ID: {result.take_profit_order_id}")
         if result.stop_loss_order_id:
