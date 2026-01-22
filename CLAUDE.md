@@ -2,6 +2,30 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Session Startup
+
+**At the start of each session, read these files to understand context:**
+
+1. **`journal/` directory** - Read the most recent journal entry (sorted by date)
+   - Provides summary of previous day's work
+   - Lists what was completed and what's pending
+   - Contains deployment notes and verification steps
+
+2. **`plan.md`** - Project implementation plan
+   - Current phase and next steps
+   - Decision log with rationale
+   - Completed milestones
+
+3. **`requirements.md`** - Functional and non-functional requirements
+   - FR1-FR9: Functional requirements
+   - NFR1-NFR4: Non-functional requirements
+   - Database requirements (DR1-DR6)
+
+**After completing work, update:**
+- Create/update today's journal entry in `journal/YYYY-MM-DD.md`
+- Update `plan.md` with completed items and decisions
+- Update `requirements.md` if requirements change
+
 ## Project Overview
 
 Automated trading system that connects to Interactive Brokers TWS API to sell puts on SPY. Uses Python with ib_insync library for TWS communication.
@@ -39,9 +63,15 @@ poetry run pytest tests/test_environment.py::TestPythonEnvironment::test_python_
 - Key methods: `connect()`, `disconnect()`, `get_spy_price()`, `get_account_summary()`
 
 ### TWS Connection
-- Paper trading port: 7497
-- Live trading port: 7496
+- Paper trading port: 7497 (local) or 4002 (Docker)
+- Live trading port: 7496 (local) or 4001 (Docker)
 - Tests automatically skip if TWS is not running
+
+### Database Separation
+- `TRADING_MODE=paper` -> uses `ibkr_puts_paper` database
+- `TRADING_MODE=live` -> uses `ibkr_puts` database
+- Set via `.env` file or environment variable
+- Docker containers inherit from `.env`
 
 ## Key Dependencies
 
