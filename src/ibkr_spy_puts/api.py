@@ -411,57 +411,56 @@ def _fetch_spy_price() -> dict:
 
     script = f'''
 import json
-import math
+from datetime import datetime
 import asyncio
 asyncio.set_event_loop(asyncio.new_event_loop())
 from ib_insync import IB, Stock
-
-def is_valid(v):
-    return v is not None and not math.isnan(v) and v > 0
 
 ib = IB()
 result = {{"error": None}}
 
 try:
     ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=98, readonly=True, timeout=10)
-    # Use delayed data (type 3) - more reliable
-    ib.reqMarketDataType(3)
 
-    # Use ARCA exchange for delayed data (doesn't require subscription for delayed)
-    spy = Stock("SPY", "ARCA", "USD")
+    spy = Stock("SPY", "SMART", "USD")
     ib.qualifyContracts(spy)
 
-    # Use reqTickers for snapshot instead of streaming
-    tickers = ib.reqTickers(spy)
-    if tickers:
-        ticker = tickers[0]
+    # Use historical data - always works without market data subscription
+    bars = ib.reqHistoricalData(
+        spy,
+        endDateTime="",
+        durationStr="2 D",
+        barSizeSetting="1 day",
+        whatToShow="TRADES",
+        useRTH=True,
+        formatDate=1,
+    )
+
+    if bars and len(bars) >= 2:
+        # Last bar is today (or most recent trading day)
+        # Second to last is previous close
+        today_bar = bars[-1]
+        prev_bar = bars[-2]
+
+        result["price"] = today_bar.close
+        result["close"] = prev_bar.close
         result["debug"] = {{
-            "last": str(ticker.last),
-            "bid": str(ticker.bid),
-            "ask": str(ticker.ask),
-            "close": str(ticker.close),
-            "marketPrice": str(ticker.marketPrice()),
+            "today_date": str(today_bar.date),
+            "today_close": today_bar.close,
+            "prev_date": str(prev_bar.date),
+            "prev_close": prev_bar.close,
         }}
 
-        # Try marketPrice first (most reliable)
-        mp = ticker.marketPrice()
-        if is_valid(mp):
-            result["price"] = mp
-        elif is_valid(ticker.last):
-            result["price"] = ticker.last
-        elif is_valid(ticker.bid) and is_valid(ticker.ask):
-            result["price"] = (ticker.bid + ticker.ask) / 2
-
-        if is_valid(ticker.close):
-            result["close"] = ticker.close
-
-        if result.get("price") and result.get("close"):
+        if result["price"] and result["close"]:
             change = result["price"] - result["close"]
             pct = (change / result["close"]) * 100
             result["change"] = round(change, 2)
             result["change_pct"] = round(pct, 2)
+    elif bars and len(bars) == 1:
+        result["price"] = bars[0].close
+        result["debug"] = {{"only_one_bar": str(bars[0].date)}}
     else:
-        result["debug"] = {{"tickers": "empty"}}
+        result["debug"] = {{"bars": "none returned"}}
 
     ib.disconnect()
 except Exception as e:
