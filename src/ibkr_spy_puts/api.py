@@ -349,16 +349,26 @@ try:
 
     # STEP 5: Fetch SPY stock price (using same connection that works for options)
     try:
+        # Capture any errors from IBKR
+        errors = []
+        def on_error(reqId, errorCode, errorString, contract):
+            errors.append({{'reqId': reqId, 'code': errorCode, 'msg': errorString}})
+        ib.errorEvent += on_error
+
         # Set delayed data type explicitly (same as options)
         ib.reqMarketDataType(3)
 
         spy = Stock("SPY", "SMART", "USD")
-        ib.qualifyContracts(spy)
+        qualified = ib.qualifyContracts(spy)
         # Request with generic tick type 233 (RTVolume - real-time trades)
         spy_ticker = ib.reqMktData(spy, "233", False, False)
         ib.sleep(3)
 
         spy_data = {{}}
+        spy_data['qualified'] = bool(qualified)
+        spy_data['conId'] = spy.conId if qualified else None
+        if errors:
+            spy_data['errors'] = errors
         if is_valid_price(spy_ticker.last):
             spy_data['price'] = spy_ticker.last
         elif is_valid_price(spy_ticker.bid) and is_valid_price(spy_ticker.ask):
