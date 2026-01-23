@@ -355,13 +355,15 @@ try:
             errors.append({{'reqId': reqId, 'code': errorCode, 'msg': errorString}})
         ib.errorEvent += on_error
 
-        # Set delayed data type explicitly (same as options)
-        ib.reqMarketDataType(3)
+        # Use live data (1) for BATS - covered by Cboe One
+        ib.reqMarketDataType(1)
 
-        spy = Stock("SPY", "SMART", "USD")
+        # Use BATS exchange - covered by Cboe One subscription
+        # SMART routes to ARCA which user doesn't have for API
+        spy = Stock("SPY", "BATS", "USD")
         qualified = ib.qualifyContracts(spy)
-        # Request with generic tick type 233 (RTVolume - real-time trades)
-        spy_ticker = ib.reqMktData(spy, "233", False, False)
+        # Request market data (no generic tick type needed for basic quote)
+        spy_ticker = ib.reqMktData(spy, "", False, False)
         ib.sleep(3)
 
         spy_data = {{}}
