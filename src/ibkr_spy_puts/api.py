@@ -188,9 +188,11 @@ async def get_positions_live():
             "market_open": market_is_open,
         }
 
-        # Include SPY data if available
-        if live_data.get('spy'):
-            response['spy'] = live_data['spy']
+        # Get SPY price from connection manager (streaming data)
+        manager = get_connection_manager()
+        spy_data = manager.get_spy_price()
+        if spy_data.get('price'):
+            response['spy_price'] = spy_data
 
         return response
     finally:
@@ -244,13 +246,9 @@ def _fetch_live_position_data(positions: list, fetch_greeks: bool = True) -> dic
     # Script to fetch P&L, margin, and optionally Greeks
     script = f'''
 import json
-import math
 import asyncio
 asyncio.set_event_loop(asyncio.new_event_loop())
-from ib_insync import IB, Option, Stock, MarketOrder
-
-def is_valid_price(v):
-    return v is not None and not math.isnan(v) and v > 0
+from ib_insync import IB, Option, MarketOrder
 
 ib = IB()
 result = {{}}
@@ -347,54 +345,6 @@ try:
         for opt, ticker in tickers:
             ib.cancelMktData(opt)
 
-    # STEP 5: Fetch SPY stock price (using same connection that works for options)
-    try:
-        # Capture any errors from IBKR
-        errors = []
-        def on_error(reqId, errorCode, errorString, contract):
-            errors.append({{'reqId': reqId, 'code': errorCode, 'msg': errorString}})
-        ib.errorEvent += on_error
-
-        # Use DELAYED data (type 3) - same as working options code
-        ib.reqMarketDataType(3)
-
-        # Match exactly what works in standalone test - no extra tick types
-        spy = Stock("SPY", "SMART", "USD")
-        ib.qualifyContracts(spy)
-        # Use empty tick type string like the working standalone test
-        spy_ticker = ib.reqMktData(spy, "", False, False)
-        ib.sleep(5)
-
-        spy_data = {{}}
-        spy_data['exchange'] = spy.exchange
-        spy_data['conId'] = spy.conId
-        if errors:
-            spy_data['errors'] = errors
-        if is_valid_price(spy_ticker.last):
-            spy_data['price'] = spy_ticker.last
-        elif is_valid_price(spy_ticker.bid) and is_valid_price(spy_ticker.ask):
-            spy_data['price'] = (spy_ticker.bid + spy_ticker.ask) / 2
-
-        if is_valid_price(spy_ticker.close):
-            spy_data['close'] = spy_ticker.close
-
-        if spy_data.get('price') and spy_data.get('close'):
-            spy_data['change'] = round(spy_data['price'] - spy_data['close'], 2)
-            spy_data['change_pct'] = round((spy_data['change'] / spy_data['close']) * 100, 2)
-
-        # Include raw values for debugging
-        spy_data['debug'] = {{
-            'last': str(spy_ticker.last),
-            'bid': str(spy_ticker.bid),
-            'ask': str(spy_ticker.ask),
-            'close': str(spy_ticker.close),
-        }}
-
-        result['spy'] = spy_data
-        ib.cancelMktData(spy)
-    except Exception as e:
-        result['spy'] = {{'error': str(e)}}
-
     ib.disconnect()
 except Exception as e:
     result['error'] = str(e)
@@ -451,80 +401,6 @@ async def get_spy_price():
     """
     manager = get_connection_manager()
     return manager.get_spy_price()
-
-
-def _fetch_spy_price() -> dict:
-    """Fetch SPY price from IBKR."""
-    import subprocess
-    import json
-
-    from ibkr_spy_puts.config import TWSSettings
-    tws_settings = TWSSettings()
-
-    script = f'''
-import json
-from datetime import datetime
-import asyncio
-asyncio.set_event_loop(asyncio.new_event_loop())
-from ib_insync import IB, Stock
-
-ib = IB()
-result = {{"error": None}}
-
-try:
-    ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=98, readonly=True, timeout=10)
-
-    spy = Stock("SPY", "SMART", "USD")
-    ib.qualifyContracts(spy)
-
-    # Use historical data - always works without market data subscription
-    bars = ib.reqHistoricalData(
-        spy,
-        endDateTime="",
-        durationStr="2 D",
-        barSizeSetting="1 day",
-        whatToShow="TRADES",
-        useRTH=True,
-        formatDate=1,
-    )
-
-    if bars and len(bars) >= 2:
-        # Last bar is today (or most recent trading day)
-        # Second to last is previous close
-        today_bar = bars[-1]
-        prev_bar = bars[-2]
-
-        result["price"] = today_bar.close
-        result["close"] = prev_bar.close
-
-        if result["price"] and result["close"]:
-            change = result["price"] - result["close"]
-            pct = (change / result["close"]) * 100
-            result["change"] = round(change, 2)
-            result["change_pct"] = round(pct, 2)
-    elif bars and len(bars) == 1:
-        result["price"] = bars[0].close
-
-    ib.disconnect()
-except Exception as e:
-    result["error"] = str(e)
-
-print(json.dumps(result))
-'''
-
-    try:
-        proc = subprocess.run(
-            ["python", "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return json.loads(proc.stdout.strip())
-    except Exception as e:
-        return {"error": str(e)}
-
-    return {"error": "Failed to fetch SPY price"}
 
 
 @app.get("/api/snapshots")
