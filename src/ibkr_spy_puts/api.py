@@ -359,16 +359,17 @@ try:
         ib.reqMarketDataType(1)
 
         # Use BATS exchange - covered by Cboe One subscription
-        # SMART routes to ARCA which user doesn't have for API
+        # Don't call qualifyContracts as it may override to ARCA
         spy = Stock("SPY", "BATS", "USD")
-        qualified = ib.qualifyContracts(spy)
+        # Set conId manually for SPY (SPDR S&P 500 ETF)
+        spy.conId = 756733  # SPY conId
         # Request market data (no generic tick type needed for basic quote)
         spy_ticker = ib.reqMktData(spy, "", False, False)
         ib.sleep(3)
 
         spy_data = {{}}
-        spy_data['qualified'] = bool(qualified)
-        spy_data['conId'] = spy.conId if qualified else None
+        spy_data['exchange'] = spy.exchange
+        spy_data['conId'] = spy.conId
         if errors:
             spy_data['errors'] = errors
         if is_valid_price(spy_ticker.last):
