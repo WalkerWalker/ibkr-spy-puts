@@ -315,10 +315,62 @@
             padding: 5px 15px;
             border-bottom: none;
         }
+        /* Header row with SPY price */
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .header-row h1 {
+            margin-bottom: 0;
+        }
+        .spy-price-display {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: #16213e;
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+        }
+        .spy-label {
+            color: #00d4ff;
+            font-weight: 700;
+            font-size: 16px;
+        }
+        .spy-price {
+            font-size: 24px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .spy-change {
+            font-size: 16px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 4px;
+        }
+        .spy-change.positive {
+            color: #00ff88;
+            background: rgba(0, 255, 136, 0.1);
+        }
+        .spy-change.negative {
+            color: #ff4444;
+            background: rgba(255, 68, 68, 0.1);
+        }
     </style>
 </head>
 <body>
-    <h1>SPY Put Strategy Dashboard</h1>
+    <div class="header-row">
+        <h1>SPY Put Strategy Dashboard</h1>
+        <div class="spy-price-display" id="spy-price-display">
+            <span class="spy-label">SPY</span>
+            <span class="spy-price" id="spy-price">--</span>
+            <span class="spy-change" id="spy-change">--</span>
+        </div>
+    </div>
 
     <!-- Connection Status Bar -->
     <div class="status-bar" id="status-bar">
@@ -802,6 +854,33 @@
         // Fetch live positions on page load and every 2 minutes
         setTimeout(fetchLivePositions, 2000);
         setInterval(fetchLivePositions, 120000);
+
+        // Fetch SPY price
+        async function fetchSpyPrice() {
+            try {
+                const response = await fetch('/api/spy-price');
+                const data = await response.json();
+
+                const priceEl = document.getElementById('spy-price');
+                const changeEl = document.getElementById('spy-change');
+
+                if (data.price && priceEl) {
+                    priceEl.textContent = `$${data.price.toFixed(2)}`;
+                }
+
+                if (data.change !== undefined && data.change_pct !== undefined && changeEl) {
+                    const sign = data.change >= 0 ? '+' : '';
+                    changeEl.textContent = `${sign}${data.change.toFixed(2)} (${sign}${data.change_pct.toFixed(2)}%)`;
+                    changeEl.className = 'spy-change ' + (data.change >= 0 ? 'positive' : 'negative');
+                }
+            } catch (error) {
+                console.error('Failed to fetch SPY price:', error);
+            }
+        }
+
+        // Fetch SPY price on page load and every 30 seconds
+        setTimeout(fetchSpyPrice, 1000);
+        setInterval(fetchSpyPrice, 30000);
 
         // Full page refresh every 5 minutes for order/position updates
         setTimeout(() => location.reload(), 300000);

@@ -361,6 +361,80 @@ async def get_trade_history():
         db.disconnect()
 
 
+@app.get("/api/spy-price")
+async def get_spy_price():
+    """Get current SPY price and daily change.
+
+    Returns SPY last price, previous close, and calculated daily change.
+    Works with delayed data if real-time not subscribed.
+    """
+    import asyncio
+    return await asyncio.to_thread(_fetch_spy_price)
+
+
+def _fetch_spy_price() -> dict:
+    """Fetch SPY price from IBKR."""
+    import subprocess
+    import json
+
+    from ibkr_spy_puts.config import TWSSettings
+    tws_settings = TWSSettings()
+
+    script = f'''
+import json
+import asyncio
+asyncio.set_event_loop(asyncio.new_event_loop())
+from ib_insync import IB, Stock
+
+ib = IB()
+result = {{"error": None}}
+
+try:
+    ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=98, readonly=True, timeout=10)
+    ib.reqMarketDataType(3)  # Delayed if real-time not available
+
+    spy = Stock("SPY", "SMART", "USD")
+    ib.qualifyContracts(spy)
+    ticker = ib.reqMktData(spy, "", False, False)
+    ib.sleep(2)
+
+    if ticker.last and ticker.last > 0:
+        result["price"] = ticker.last
+    elif ticker.bid and ticker.bid > 0:
+        result["price"] = (ticker.bid + ticker.ask) / 2
+
+    if ticker.close and ticker.close > 0:
+        result["close"] = ticker.close
+
+    if result.get("price") and result.get("close"):
+        change = result["price"] - result["close"]
+        pct = (change / result["close"]) * 100
+        result["change"] = round(change, 2)
+        result["change_pct"] = round(pct, 2)
+
+    ib.cancelMktData(spy)
+    ib.disconnect()
+except Exception as e:
+    result["error"] = str(e)
+
+print(json.dumps(result))
+'''
+
+    try:
+        proc = subprocess.run(
+            ["python", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return json.loads(proc.stdout.strip())
+    except Exception as e:
+        return {"error": str(e)}
+
+    return {"error": "Failed to fetch SPY price"}
+
+
 @app.get("/api/snapshots")
 async def get_snapshots(limit: int = 30):
     """Get recent daily book snapshots.
