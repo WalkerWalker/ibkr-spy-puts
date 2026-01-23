@@ -963,7 +963,9 @@ class IBKRClient:
     def get_unrealized_pnl_for_spy_puts(self, positions: list) -> float | None:
         """Calculate unrealized P&L for SPY put positions.
 
-        For short puts: profit = (entry_price - current_price) * quantity * 100
+        Uses IBKR portfolio data which has unrealized P&L available even when
+        market is closed. Falls back to calculating from entry prices vs current
+        prices if portfolio data is not available.
 
         Args:
             positions: List of position dicts with symbol, strike, expiration, entry_price, quantity
@@ -978,10 +980,53 @@ class IBKRClient:
         logger = logging.getLogger(__name__)
 
         try:
+            # First, try to use portfolio data (works even when market is closed)
+            portfolio = self.ib.portfolio()
+            spy_put_pnl = {}
+
+            for item in portfolio:
+                c = item.contract
+                if (c.symbol == "SPY" and
+                    c.secType == "OPT" and
+                    getattr(c, "right", "") == "P"):
+                    # Use strike as key (may have multiple expirations)
+                    key = (c.strike, getattr(c, "lastTradeDateOrContractMonth", ""))
+                    spy_put_pnl[key] = item.unrealizedPNL
+                    logger.info(f"  Portfolio {c.strike}P: unrealizedPNL=${item.unrealizedPNL:.2f}")
+
+            if spy_put_pnl:
+                total_pnl = sum(spy_put_pnl.values())
+                logger.info(f"Total unrealized P&L for SPY puts (from portfolio): ${total_pnl:,.2f}")
+                return total_pnl
+
+            # Fallback: calculate from market data (only works during market hours)
+            logger.info("Portfolio data not available, trying market data...")
+            return self._calculate_pnl_from_market_data(positions)
+
+        except Exception as e:
+            logger.warning(f"Failed to calculate unrealized P&L for SPY puts: {e}")
+            return None
+
+    def _calculate_pnl_from_market_data(self, positions: list) -> float | None:
+        """Calculate P&L using market data (bid/ask prices).
+
+        This only works during market hours when quotes are available.
+
+        Args:
+            positions: List of position dicts with symbol, strike, expiration, entry_price, quantity
+
+        Returns:
+            Total unrealized P&L, or None if prices not available.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        try:
             from ib_insync import Option as IbOption
 
             total_pnl = 0.0
-            logger.info(f"Calculating unrealized P&L for {len(positions)} position(s)")
+            positions_with_price = 0
+            logger.info(f"Calculating unrealized P&L for {len(positions)} position(s) from market data")
 
             for pos in positions:
                 symbol = pos.get("symbol", "SPY")
@@ -1020,15 +1065,20 @@ class IBKRClient:
                     # For short puts: profit when price goes down
                     pos_pnl = (entry_price - current_price) * quantity * 100
                     total_pnl += pos_pnl
+                    positions_with_price += 1
                     logger.info(f"  {strike} strike: entry=${entry_price:.2f}, current=${current_price:.2f}, P&L=${pos_pnl:.2f}")
                 else:
                     logger.warning(f"  {strike} strike: no price available")
+
+            if positions_with_price == 0:
+                logger.warning("No prices available for any position")
+                return None
 
             logger.info(f"Total unrealized P&L for SPY puts: ${total_pnl:,.2f}")
             return total_pnl
 
         except Exception as e:
-            logger.warning(f"Failed to calculate unrealized P&L for SPY puts: {e}")
+            logger.warning(f"Failed to calculate P&L from market data: {e}")
             return None
 
     def get_option_greeks(
