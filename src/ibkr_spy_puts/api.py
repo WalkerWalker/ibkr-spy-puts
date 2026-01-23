@@ -355,15 +355,13 @@ try:
             errors.append({{'reqId': reqId, 'code': errorCode, 'msg': errorString}})
         ib.errorEvent += on_error
 
-        # Use live data (1) for BATS - covered by Cboe One
-        ib.reqMarketDataType(1)
+        # Use DELAYED data (type 3) - should work without subscription
+        ib.reqMarketDataType(3)
 
-        # Use BATS exchange - covered by Cboe One subscription
-        # Don't call qualifyContracts as it may override to ARCA
-        spy = Stock("SPY", "BATS", "USD")
-        # Set conId manually for SPY (SPDR S&P 500 ETF)
-        spy.conId = 756733  # SPY conId
-        # Request market data (no generic tick type needed for basic quote)
+        # Use SMART exchange with delayed data
+        spy = Stock("SPY", "SMART", "USD")
+        ib.qualifyContracts(spy)
+        # Request delayed market data
         spy_ticker = ib.reqMktData(spy, "", False, False)
         ib.sleep(3)
 
