@@ -152,21 +152,25 @@ class IBConnectionManager:
     def _subscribe_spy_data(self):
         """Subscribe to SPY market data with persistent streaming."""
         try:
-            # Use live data (type 1) - we have Cboe One subscription
-            self.ib.reqMarketDataType(1)
+            # Use delayed data (type 3) - same as options, more reliable
+            self.ib.reqMarketDataType(3)
 
             # Use SMART exchange - will route to best available
             self._spy_contract = Stock("SPY", "SMART", "USD")
-            self.ib.qualifyContracts(self._spy_contract)
+            qualified = self.ib.qualifyContracts(self._spy_contract)
+
+            if not qualified:
+                logger.error("Failed to qualify SPY contract")
+                return
 
             # Subscribe to streaming market data (not snapshot)
             # snapshot=False means persistent subscription
             self._spy_ticker = self.ib.reqMktData(self._spy_contract, "", False, False)
 
             # Wait for initial data
-            self.ib.sleep(2)
+            self.ib.sleep(3)
 
-            logger.info(f"SPY streaming subscription active. Initial: last={self._spy_ticker.last}, bid={self._spy_ticker.bid}")
+            logger.info(f"SPY streaming subscription active. Initial: last={self._spy_ticker.last}, bid={self._spy_ticker.bid}, close={self._spy_ticker.close}")
         except Exception as e:
             logger.error(f"Failed to subscribe to SPY data: {e}")
 
