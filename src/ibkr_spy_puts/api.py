@@ -152,7 +152,8 @@ async def get_positions_live():
 
             if key in live_data and isinstance(live_data[key], dict):
                 live = live_data[key]
-                pos_copy['current_price'] = live.get('mid')
+                current_price = live.get('mid')
+                pos_copy['current_price'] = current_price
                 pos_copy['bid'] = live.get('bid')
                 pos_copy['ask'] = live.get('ask')
                 pos_copy['delta'] = live.get('delta')
@@ -161,14 +162,21 @@ async def get_positions_live():
                 pos_copy['vega'] = live.get('vega')
                 pos_copy['iv'] = live.get('iv')
                 pos_copy['margin'] = live.get('margin')
-                pos_copy['unrealized_pnl'] = live.get('unrealized_pnl')
 
-                # Calculate P&L % if we have P&L and entry price
-                if live.get('unrealized_pnl') is not None and pos['entry_price']:
+                # Calculate P&L per position using entry price and current price
+                # For short puts: profit when price goes down
+                # P&L = (entry_price - current_price) * 100 * quantity
+                if current_price is not None and pos['entry_price']:
                     entry = float(pos['entry_price'])
-                    premium_collected = entry * 100 * pos['quantity']
+                    qty = pos['quantity']
+                    # Per-position P&L (not aggregate from IBKR)
+                    pnl = (entry - current_price) * 100 * qty
+                    pos_copy['unrealized_pnl'] = round(pnl, 2)
+
+                    # P&L percentage based on premium collected
+                    premium_collected = entry * 100 * qty
                     if premium_collected > 0:
-                        pnl_pct = (live['unrealized_pnl'] / premium_collected) * 100
+                        pnl_pct = (pnl / premium_collected) * 100
                         pos_copy['unrealized_pnl_pct'] = round(pnl_pct, 2)
 
             enriched.append(pos_copy)
