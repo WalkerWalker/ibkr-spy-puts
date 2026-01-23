@@ -358,11 +358,11 @@ try:
         # Use DELAYED data (type 3) - same as working options code
         ib.reqMarketDataType(3)
 
-        # Match exactly what works for options - no extra sleeps
+        # Match exactly what works in standalone test - no extra tick types
         spy = Stock("SPY", "SMART", "USD")
         ib.qualifyContracts(spy)
-        # Use same pattern as options: reqMktData with tick type, then sleep
-        spy_ticker = ib.reqMktData(spy, "106", False, False)
+        # Use empty tick type string like the working standalone test
+        spy_ticker = ib.reqMktData(spy, "", False, False)
         ib.sleep(5)
 
         spy_data = {{}}
