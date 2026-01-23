@@ -6,6 +6,7 @@ providing real-time status updates to the dashboard without spawning subprocesse
 
 import asyncio
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass, field
@@ -157,6 +158,8 @@ class IBConnectionManager:
             # Use BATS exchange (part of Cboe, covered by Cboe One subscription)
             self._spy_contract = Stock("SPY", "BATS", "USD")
             self._spy_ticker = self.ib.reqMktData(self._spy_contract, "", False, False)
+            # Give time for initial data to arrive
+            self.ib.sleep(2)
             logger.info("Subscribed to SPY live market data via BATS")
         except Exception as e:
             logger.error(f"Failed to subscribe to SPY data: {e}")
@@ -205,20 +208,38 @@ class IBConnectionManager:
             # Update SPY price from ticker
             spy_price = SpyPrice(last_update=datetime.now())
             if self._spy_ticker:
+                # Helper to check if value is valid (not None, not nan, positive)
+                def is_valid(v):
+                    return v is not None and not math.isnan(v) and v > 0
+
+                # Log ticker values for debugging
+                logger.debug(
+                    f"SPY ticker: last={self._spy_ticker.last}, "
+                    f"bid={self._spy_ticker.bid}, ask={self._spy_ticker.ask}, "
+                    f"close={self._spy_ticker.close}"
+                )
+
                 # Get price (prefer last, then mid)
-                if self._spy_ticker.last and self._spy_ticker.last > 0:
+                if is_valid(self._spy_ticker.last):
                     spy_price.price = self._spy_ticker.last
-                elif self._spy_ticker.bid and self._spy_ticker.bid > 0:
+                elif is_valid(self._spy_ticker.bid) and is_valid(self._spy_ticker.ask):
                     spy_price.price = (self._spy_ticker.bid + self._spy_ticker.ask) / 2
 
                 # Get previous close
-                if self._spy_ticker.close and self._spy_ticker.close > 0:
+                if is_valid(self._spy_ticker.close):
                     spy_price.close = self._spy_ticker.close
 
                 # Calculate change
                 if spy_price.price and spy_price.close:
                     spy_price.change = round(spy_price.price - spy_price.close, 2)
                     spy_price.change_pct = round((spy_price.change / spy_price.close) * 100, 2)
+
+                # Log if no price found
+                if spy_price.price is None:
+                    logger.warning(
+                        f"No valid SPY price: last={self._spy_ticker.last}, "
+                        f"bid={self._spy_ticker.bid}, ask={self._spy_ticker.ask}"
+                    )
 
             with self._lock:
                 self._cache.orders = orders
