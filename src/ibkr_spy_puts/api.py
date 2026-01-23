@@ -349,10 +349,14 @@ try:
 
     # STEP 5: Fetch SPY stock price (using same connection that works for options)
     try:
+        # Set delayed data type explicitly (same as options)
+        ib.reqMarketDataType(3)
+
         spy = Stock("SPY", "SMART", "USD")
         ib.qualifyContracts(spy)
-        spy_ticker = ib.reqMktData(spy, "", False, False)
-        ib.sleep(2)
+        # Request with generic tick type 233 (RTVolume - real-time trades)
+        spy_ticker = ib.reqMktData(spy, "233", False, False)
+        ib.sleep(3)
 
         spy_data = {{}}
         if is_valid_price(spy_ticker.last):
