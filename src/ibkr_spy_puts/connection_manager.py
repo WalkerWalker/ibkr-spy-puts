@@ -155,17 +155,17 @@ class IBConnectionManager:
     def _subscribe_spy_data(self):
         """Subscribe to SPY market data (streaming, no per-request fees)."""
         try:
-            # Use live data type (1) for BATS - covered by Cboe One subscription
-            self.ib.reqMarketDataType(1)
+            # Use delayed data type (3) - no subscription required
+            self.ib.reqMarketDataType(3)
 
-            # Use BATS directly - covered by Cboe One subscription
-            self._spy_contract = Stock("SPY", "BATS", "USD")
+            # Use SMART routing - IBKR will pick best exchange
+            self._spy_contract = Stock("SPY", "SMART", "USD")
             self.ib.qualifyContracts(self._spy_contract)
             logger.info(f"SPY contract: conId={self._spy_contract.conId}, exchange={self._spy_contract.exchange}")
 
             # Subscribe to streaming market data (NOT snapshot to avoid fees)
             self._spy_ticker = self.ib.reqMktData(self._spy_contract, "", False, False)
-            logger.info("SPY streaming subscription started")
+            logger.info("SPY delayed streaming subscription started")
 
         except Exception as e:
             logger.error(f"Failed to subscribe to SPY data: {e}")
