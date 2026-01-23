@@ -188,6 +188,10 @@ async def get_positions_live():
             "market_open": market_is_open,
         }
 
+        # Include SPY data if available
+        if live_data.get('spy'):
+            response['spy'] = live_data['spy']
+
         return response
     finally:
         db.disconnect()
