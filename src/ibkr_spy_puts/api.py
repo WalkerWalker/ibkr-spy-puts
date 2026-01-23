@@ -35,6 +35,11 @@ class NoCacheMiddleware(BaseHTTPMiddleware):
             response.headers["Expires"] = "0"
         return response
 from ibkr_spy_puts.database import Database
+from ibkr_spy_puts.connection_manager import (
+    get_connection_manager,
+    start_connection_manager,
+    stop_connection_manager,
+)
 
 # Initialize FastAPI
 app = FastAPI(
@@ -45,6 +50,18 @@ app = FastAPI(
 
 # Add no-cache middleware
 app.add_middleware(NoCacheMiddleware)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the connection manager when the app starts."""
+    start_connection_manager()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop the connection manager when the app shuts down."""
+    stop_connection_manager()
 
 # Templates directory
 templates_dir = Path(__file__).parent / "templates"
@@ -507,141 +524,37 @@ def _check_connection_via_socket():
     return result
 
 
-# Cache for connection status to prevent flickering
-_connection_cache = {
-    "last_good_result": None,
-    "last_good_time": None,
-    "consecutive_failures": 0,
-}
-
-
 async def get_connection_and_orders():
-    """Get TWS connection status and live orders.
+    """Get TWS connection status and live orders from the connection manager.
 
-    Uses caching to prevent UI flickering when subprocess checks fail intermittently.
-    Will return cached "logged in" state for up to 2 minutes if checks fail.
+    Uses the persistent connection manager instead of spawning subprocesses.
     """
-    import asyncio
-    import random
-    from datetime import datetime, timedelta
+    import os
+    from ibkr_spy_puts.config import ScheduleSettings
 
-    # Use socket-based check to avoid ib_insync event loop issues
-    result = await asyncio.to_thread(_check_connection_via_socket)
+    schedule_settings = ScheduleSettings(
+        trade_time=os.getenv("SCHEDULE_TRADE_TIME", "09:30"),
+        timezone=os.getenv("SCHEDULE_TIMEZONE", "America/New_York"),
+    )
 
-    # If socket shows not connected, gateway is truly down
-    if not result["connection"]["connected"]:
-        _connection_cache["consecutive_failures"] = 0
-        _connection_cache["last_good_result"] = None
-        return result
+    manager = get_connection_manager()
+    data = manager.get_all()
 
-    # Socket connected - try to get detailed info using ib_insync in subprocess
+    # Add schedule info to connection status
+    data["connection"]["tws_host"] = manager.settings.host
+    data["connection"]["tws_port"] = manager.settings.port
+    data["connection"]["next_trade_time"] = schedule_settings.trade_time
+    data["connection"]["timezone"] = schedule_settings.timezone
+
+    # Check if today is a trading day
     try:
-        import subprocess
-        import json
-        from ibkr_spy_puts.config import TWSSettings
+        from ibkr_spy_puts.scheduler import MarketCalendar
+        calendar = MarketCalendar()
+        data["connection"]["is_trading_day"] = calendar.is_trading_day()
+    except Exception:
+        data["connection"]["is_trading_day"] = True
 
-        tws_settings = TWSSettings()
-        # Use random client ID to avoid conflicts with concurrent requests
-        client_id = random.randint(90, 99)
-
-        # Run a quick subprocess to get account info, orders, and positions
-        script = f'''
-import json
-import asyncio
-asyncio.set_event_loop(asyncio.new_event_loop())
-from ib_insync import IB
-ib = IB()
-result = {{"account": None, "trading_mode": None, "orders": [], "positions": []}}
-try:
-    ib.connect("{tws_settings.host}", {tws_settings.port}, clientId={client_id}, readonly=True, timeout=10)
-    accounts = ib.managedAccounts()
-    if accounts:
-        result["account"] = accounts[0]
-        result["trading_mode"] = "PAPER" if accounts[0].startswith("DU") else "LIVE"
-
-    # Get open orders
-    ib.reqAllOpenOrders()
-    ib.sleep(1)
-    for trade in ib.openTrades():
-        c, o, s = trade.contract, trade.order, trade.orderStatus
-        result["orders"].append({{
-            "symbol": c.symbol,
-            "sec_type": c.secType,
-            "strike": getattr(c, "strike", None),
-            "expiration": getattr(c, "lastTradeDateOrContractMonth", None),
-            "right": getattr(c, "right", None),
-            "action": o.action,
-            "order_type": o.orderType,
-            "quantity": int(o.totalQuantity),
-            "limit_price": o.lmtPrice if o.lmtPrice else None,
-            "stop_price": o.auxPrice if o.auxPrice else None,
-            "status": s.status,
-            "filled": int(s.filled),
-            "remaining": int(s.remaining),
-            "oca_group": o.ocaGroup if o.ocaGroup else None,
-        }})
-
-    # Get live positions
-    for pos in ib.positions():
-        c = pos.contract
-        if c.secType == "OPT":
-            result["positions"].append({{
-                "symbol": c.symbol,
-                "strike": c.strike,
-                "expiration": c.lastTradeDateOrContractMonth,
-                "right": c.right,
-                "quantity": int(pos.position),
-                "avg_cost": pos.avgCost,
-            }})
-
-    ib.disconnect()
-except Exception as e:
-    result["error"] = str(e)
-print(json.dumps(result))
-'''
-        proc = await asyncio.to_thread(
-            subprocess.run,
-            ["python", "-c", script],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            data = json.loads(proc.stdout.strip())
-            if data.get("account"):
-                result["connection"]["account"] = data["account"]
-                result["connection"]["trading_mode"] = data.get("trading_mode")
-                result["connection"]["logged_in"] = True
-                result["connection"]["ready_to_trade"] = True
-                # Cache this good result
-                _connection_cache["last_good_result"] = result.copy()
-                _connection_cache["last_good_time"] = datetime.now()
-                _connection_cache["consecutive_failures"] = 0
-            result["live_orders"] = data.get("orders", [])
-            result["ibkr_positions"] = data.get("positions", [])
-            return result
-
-    except Exception as e:
-        result["connection"]["error"] = str(e)
-
-    # Subprocess failed - check if we should use cached result
-    _connection_cache["consecutive_failures"] += 1
-
-    # Use cached result if:
-    # 1. We have a cached result
-    # 2. It's less than 2 minutes old
-    # 3. We haven't had too many consecutive failures (max 5)
-    cached = _connection_cache["last_good_result"]
-    cached_time = _connection_cache["last_good_time"]
-    failures = _connection_cache["consecutive_failures"]
-
-    if cached and cached_time and failures < 5:
-        cache_age = datetime.now() - cached_time
-        if cache_age < timedelta(minutes=2):
-            # Return cached result instead of showing disconnected
-            return cached
-
-    return result
+    return data
 
 
 @app.get("/api/connection-status")
