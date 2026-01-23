@@ -444,12 +444,6 @@ try:
 
         result["price"] = today_bar.close
         result["close"] = prev_bar.close
-        result["debug"] = {{
-            "today_date": str(today_bar.date),
-            "today_close": today_bar.close,
-            "prev_date": str(prev_bar.date),
-            "prev_close": prev_bar.close,
-        }}
 
         if result["price"] and result["close"]:
             change = result["price"] - result["close"]
@@ -458,9 +452,6 @@ try:
             result["change_pct"] = round(pct, 2)
     elif bars and len(bars) == 1:
         result["price"] = bars[0].close
-        result["debug"] = {{"only_one_bar": str(bars[0].date)}}
-    else:
-        result["debug"] = {{"bars": "none returned"}}
 
     ib.disconnect()
 except Exception as e:
