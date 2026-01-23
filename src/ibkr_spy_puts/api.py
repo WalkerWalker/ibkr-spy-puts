@@ -257,7 +257,7 @@ result = {{}}
 fetch_greeks = {fetch_greeks_str}
 
 try:
-    ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=97, readonly=True, timeout=15)
+    ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=97, readonly=False, timeout=15)
 
     contracts_info = {contracts_json}
 
