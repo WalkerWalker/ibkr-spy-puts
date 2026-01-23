@@ -355,17 +355,15 @@ try:
             errors.append({{'reqId': reqId, 'code': errorCode, 'msg': errorString}})
         ib.errorEvent += on_error
 
-        # Use DELAYED-FROZEN data (type 4) - should work without subscription
-        ib.reqMarketDataType(4)
-        ib.sleep(0.5)  # Wait for market data type to be set
+        # Use DELAYED data (type 3) - same as working options code
+        ib.reqMarketDataType(3)
 
-        # Use SMART exchange with delayed data
+        # Match exactly what works for options - no extra sleeps
         spy = Stock("SPY", "SMART", "USD")
         ib.qualifyContracts(spy)
-        # Request delayed market data with generic tick types valid for delayed
-        # 232 = Generic Last Trade, 236 = Shortable
-        spy_ticker = ib.reqMktData(spy, "232,236", False, False)
-        ib.sleep(5)  # Wait longer for delayed data
+        # Use same pattern as options: reqMktData with tick type, then sleep
+        spy_ticker = ib.reqMktData(spy, "106", False, False)
+        ib.sleep(5)
 
         spy_data = {{}}
         spy_data['exchange'] = spy.exchange
