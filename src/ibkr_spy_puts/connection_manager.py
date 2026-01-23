@@ -152,6 +152,32 @@ class IBConnectionManager:
             logger.error(f"Failed to connect: {e}")
             self._update_status(connected=False, error=str(e))
 
+    def _on_spy_ticker_update(self, ticker):
+        """Callback when SPY ticker data is updated."""
+        def is_valid(v):
+            return v is not None and not math.isnan(v) and v > 0
+
+        spy_price = SpyPrice(last_update=datetime.now())
+
+        # Get price (prefer last, then mid)
+        if is_valid(ticker.last):
+            spy_price.price = ticker.last
+        elif is_valid(ticker.bid) and is_valid(ticker.ask):
+            spy_price.price = (ticker.bid + ticker.ask) / 2
+
+        # Get previous close
+        if is_valid(ticker.close):
+            spy_price.close = ticker.close
+
+        # Calculate change
+        if spy_price.price and spy_price.close:
+            spy_price.change = round(spy_price.price - spy_price.close, 2)
+            spy_price.change_pct = round((spy_price.change / spy_price.close) * 100, 2)
+
+        # Update cache atomically
+        with self._lock:
+            self._cache.spy_price = spy_price
+
     def _subscribe_spy_data(self):
         """Subscribe to SPY market data with persistent streaming."""
         try:
@@ -170,13 +196,12 @@ class IBConnectionManager:
             logger.info(f"SPY contract qualified: conId={self._spy_contract.conId}, exchange={self._spy_contract.exchange}, primaryExchange={self._spy_contract.primaryExchange}")
 
             # Subscribe to streaming market data (not snapshot)
-            # snapshot=False means persistent subscription
             self._spy_ticker = self.ib.reqMktData(self._spy_contract, "", False, False)
 
-            # Wait for initial data
-            self.ib.sleep(5)
+            # Register callback for when ticker updates
+            self._spy_ticker.updateEvent += self._on_spy_ticker_update
 
-            logger.info(f"SPY streaming subscription active. Initial: last={self._spy_ticker.last}, bid={self._spy_ticker.bid}, close={self._spy_ticker.close}")
+            logger.info("SPY streaming subscription active with callback")
         except Exception as e:
             logger.error(f"Failed to subscribe to SPY data: {e}")
 
@@ -221,39 +246,12 @@ class IBConnectionManager:
                         "avg_cost": pos.avgCost,
                     })
 
-            # Read SPY price from persistent streaming ticker
-            spy_price = SpyPrice(last_update=datetime.now())
-            if self._spy_ticker:
-                # Helper to check if value is valid (not None, not nan, positive)
-                def is_valid(v):
-                    return v is not None and not math.isnan(v) and v > 0
-
-                # Get price (prefer last, then mid)
-                if is_valid(self._spy_ticker.last):
-                    spy_price.price = self._spy_ticker.last
-                elif is_valid(self._spy_ticker.bid) and is_valid(self._spy_ticker.ask):
-                    spy_price.price = (self._spy_ticker.bid + self._spy_ticker.ask) / 2
-
-                # Get previous close
-                if is_valid(self._spy_ticker.close):
-                    spy_price.close = self._spy_ticker.close
-
-                # Calculate change
-                if spy_price.price and spy_price.close:
-                    spy_price.change = round(spy_price.price - spy_price.close, 2)
-                    spy_price.change_pct = round((spy_price.change / spy_price.close) * 100, 2)
-
-                # Log if no price found (for debugging)
-                if spy_price.price is None:
-                    logger.warning(
-                        f"No valid SPY price from ticker: last={self._spy_ticker.last}, "
-                        f"bid={self._spy_ticker.bid}, ask={self._spy_ticker.ask}"
-                    )
+            # SPY price is updated via callback (_on_spy_ticker_update)
+            # No need to poll it here
 
             with self._lock:
                 self._cache.orders = orders
                 self._cache.positions = positions
-                self._cache.spy_price = spy_price
                 self._cache.status.last_update = datetime.now()
 
         except Exception as e:
