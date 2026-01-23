@@ -424,38 +424,45 @@ result = {{"error": None}}
 
 try:
     ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=98, readonly=True, timeout=10)
-    # Use live data (type 1) - Cboe One subscription covers BATS
-    ib.reqMarketDataType(1)
+    # Use delayed data (type 3) - more reliable
+    ib.reqMarketDataType(3)
 
-    # Use BATS exchange which is covered by Cboe One subscription
-    spy = Stock("SPY", "BATS", "USD")
+    # Use ARCA exchange for delayed data (doesn't require subscription for delayed)
+    spy = Stock("SPY", "ARCA", "USD")
     ib.qualifyContracts(spy)
-    ticker = ib.reqMktData(spy, "", False, False)
-    ib.sleep(3)
 
-    # Debug: include raw values
-    result["debug"] = {{
-        "last": str(ticker.last),
-        "bid": str(ticker.bid),
-        "ask": str(ticker.ask),
-        "close": str(ticker.close),
-    }}
+    # Use reqTickers for snapshot instead of streaming
+    tickers = ib.reqTickers(spy)
+    if tickers:
+        ticker = tickers[0]
+        result["debug"] = {{
+            "last": str(ticker.last),
+            "bid": str(ticker.bid),
+            "ask": str(ticker.ask),
+            "close": str(ticker.close),
+            "marketPrice": str(ticker.marketPrice()),
+        }}
 
-    if is_valid(ticker.last):
-        result["price"] = ticker.last
-    elif is_valid(ticker.bid) and is_valid(ticker.ask):
-        result["price"] = (ticker.bid + ticker.ask) / 2
+        # Try marketPrice first (most reliable)
+        mp = ticker.marketPrice()
+        if is_valid(mp):
+            result["price"] = mp
+        elif is_valid(ticker.last):
+            result["price"] = ticker.last
+        elif is_valid(ticker.bid) and is_valid(ticker.ask):
+            result["price"] = (ticker.bid + ticker.ask) / 2
 
-    if is_valid(ticker.close):
-        result["close"] = ticker.close
+        if is_valid(ticker.close):
+            result["close"] = ticker.close
 
-    if result.get("price") and result.get("close"):
-        change = result["price"] - result["close"]
-        pct = (change / result["close"]) * 100
-        result["change"] = round(change, 2)
-        result["change_pct"] = round(pct, 2)
+        if result.get("price") and result.get("close"):
+            change = result["price"] - result["close"]
+            pct = (change / result["close"]) * 100
+            result["change"] = round(change, 2)
+            result["change_pct"] = round(pct, 2)
+    else:
+        result["debug"] = {{"tickers": "empty"}}
 
-    ib.cancelMktData(spy)
     ib.disconnect()
 except Exception as e:
     result["error"] = str(e)
