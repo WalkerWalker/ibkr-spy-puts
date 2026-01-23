@@ -67,6 +67,7 @@ class IBConnectionManager:
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._spy_contract = None
+        self._spy_ticker = None
 
     def start(self):
         """Start the connection manager in a background thread."""
@@ -152,58 +153,51 @@ class IBConnectionManager:
             self._update_status(connected=False, error=str(e))
 
     def _subscribe_spy_data(self):
-        """Set up SPY contract for price fetching."""
+        """Subscribe to SPY market data (streaming, no per-request fees)."""
         try:
-            self._spy_contract = Stock("SPY", "SMART", "USD", primaryExchange="ARCA")
-            self.ib.qualifyContracts(self._spy_contract)
-            logger.info(f"SPY contract ready: conId={self._spy_contract.conId}")
-        except Exception as e:
-            logger.error(f"Failed to set up SPY contract: {e}")
+            # Use live data type (1) for BATS - covered by Cboe One subscription
+            self.ib.reqMarketDataType(1)
 
-    def _fetch_spy_price(self):
-        """Fetch SPY price using reqTickers (simple one-shot request)."""
-        if not self._spy_contract:
+            # Use BATS directly - covered by Cboe One subscription
+            self._spy_contract = Stock("SPY", "BATS", "USD")
+            self.ib.qualifyContracts(self._spy_contract)
+            logger.info(f"SPY contract: conId={self._spy_contract.conId}, exchange={self._spy_contract.exchange}")
+
+            # Subscribe to streaming market data (NOT snapshot to avoid fees)
+            self._spy_ticker = self.ib.reqMktData(self._spy_contract, "", False, False)
+            logger.info("SPY streaming subscription started")
+
+        except Exception as e:
+            logger.error(f"Failed to subscribe to SPY data: {e}")
+
+    def _update_spy_price(self):
+        """Update SPY price from streaming ticker."""
+        if not self._spy_ticker:
             return
 
-        try:
-            self.ib.reqMarketDataType(3)  # Delayed data
-            tickers = self.ib.reqTickers(self._spy_contract)
+        def is_valid(v):
+            return v is not None and not math.isnan(v) and v > 0
 
-            if not tickers:
-                logger.warning("reqTickers returned empty for SPY")
-                return
+        spy_price = SpyPrice(last_update=datetime.now())
 
-            ticker = tickers[0]
+        # Read from streaming ticker
+        if is_valid(self._spy_ticker.last):
+            spy_price.price = self._spy_ticker.last
+        elif is_valid(self._spy_ticker.bid) and is_valid(self._spy_ticker.ask):
+            spy_price.price = (self._spy_ticker.bid + self._spy_ticker.ask) / 2
 
-            def is_valid(v):
-                return v is not None and not math.isnan(v) and v > 0
+        if is_valid(self._spy_ticker.close):
+            spy_price.close = self._spy_ticker.close
 
-            spy_price = SpyPrice(last_update=datetime.now())
+        if spy_price.price and spy_price.close:
+            spy_price.change = round(spy_price.price - spy_price.close, 2)
+            spy_price.change_pct = round((spy_price.change / spy_price.close) * 100, 2)
 
-            # Try marketPrice first, then last, then mid
-            mp = ticker.marketPrice()
-            if is_valid(mp):
-                spy_price.price = mp
-            elif is_valid(ticker.last):
-                spy_price.price = ticker.last
-            elif is_valid(ticker.bid) and is_valid(ticker.ask):
-                spy_price.price = (ticker.bid + ticker.ask) / 2
-
-            if is_valid(ticker.close):
-                spy_price.close = ticker.close
-
-            if spy_price.price and spy_price.close:
-                spy_price.change = round(spy_price.price - spy_price.close, 2)
-                spy_price.change_pct = round((spy_price.change / spy_price.close) * 100, 2)
-
-            if spy_price.price:
-                with self._lock:
-                    self._cache.spy_price = spy_price
-            else:
-                logger.warning(f"No valid SPY price: marketPrice={mp}, last={ticker.last}, bid={ticker.bid}")
-
-        except Exception as e:
-            logger.error(f"Failed to fetch SPY price: {e}")
+        if spy_price.price:
+            with self._lock:
+                self._cache.spy_price = spy_price
+        else:
+            logger.debug(f"SPY ticker: last={self._spy_ticker.last}, bid={self._spy_ticker.bid}")
 
     def _update_cache(self):
         """Update cached orders and positions."""
@@ -246,8 +240,8 @@ class IBConnectionManager:
                         "avg_cost": pos.avgCost,
                     })
 
-            # Fetch SPY price
-            self._fetch_spy_price()
+            # Update SPY price from streaming ticker
+            self._update_spy_price()
 
             with self._lock:
                 self._cache.orders = orders
