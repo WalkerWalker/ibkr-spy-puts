@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from ib_insync import IB, Option
+from ib_insync import IB, Option, Stock
 
 from ibkr_spy_puts.config import TWSSettings
 
@@ -32,11 +32,22 @@ class ConnectionStatus:
 
 
 @dataclass
+class SpyPrice:
+    """SPY price data."""
+    price: float | None = None
+    close: float | None = None
+    change: float | None = None
+    change_pct: float | None = None
+    last_update: datetime | None = None
+
+
+@dataclass
 class CachedData:
     """Cached data from IBKR."""
     status: ConnectionStatus = field(default_factory=ConnectionStatus)
     orders: list[dict] = field(default_factory=list)
     positions: list[dict] = field(default_factory=list)
+    spy_price: SpyPrice = field(default_factory=SpyPrice)
 
 
 class IBConnectionManager:
@@ -54,6 +65,8 @@ class IBConnectionManager:
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._spy_ticker = None
+        self._spy_contract = None
 
     def start(self):
         """Start the connection manager in a background thread."""
@@ -125,12 +138,28 @@ class IBConnectionManager:
                     ready_to_trade=True,
                 )
                 logger.info(f"Connected to {trading_mode} account {account}")
+
+                # Subscribe to SPY market data
+                self._subscribe_spy_data()
             else:
                 self._update_status(connected=True, logged_in=False)
 
         except Exception as e:
             logger.error(f"Failed to connect: {e}")
             self._update_status(connected=False, error=str(e))
+
+    def _subscribe_spy_data(self):
+        """Subscribe to SPY market data."""
+        try:
+            # Use delayed data if real-time not available
+            self.ib.reqMarketDataType(3)
+
+            self._spy_contract = Stock("SPY", "SMART", "USD")
+            self.ib.qualifyContracts(self._spy_contract)
+            self._spy_ticker = self.ib.reqMktData(self._spy_contract, "", False, False)
+            logger.info("Subscribed to SPY market data")
+        except Exception as e:
+            logger.error(f"Failed to subscribe to SPY data: {e}")
 
     def _update_cache(self):
         """Update cached orders and positions."""
@@ -173,9 +202,28 @@ class IBConnectionManager:
                         "avg_cost": pos.avgCost,
                     })
 
+            # Update SPY price from ticker
+            spy_price = SpyPrice(last_update=datetime.now())
+            if self._spy_ticker:
+                # Get price (prefer last, then mid)
+                if self._spy_ticker.last and self._spy_ticker.last > 0:
+                    spy_price.price = self._spy_ticker.last
+                elif self._spy_ticker.bid and self._spy_ticker.bid > 0:
+                    spy_price.price = (self._spy_ticker.bid + self._spy_ticker.ask) / 2
+
+                # Get previous close
+                if self._spy_ticker.close and self._spy_ticker.close > 0:
+                    spy_price.close = self._spy_ticker.close
+
+                # Calculate change
+                if spy_price.price and spy_price.close:
+                    spy_price.change = round(spy_price.price - spy_price.close, 2)
+                    spy_price.change_pct = round((spy_price.change / spy_price.close) * 100, 2)
+
             with self._lock:
                 self._cache.orders = orders
                 self._cache.positions = positions
+                self._cache.spy_price = spy_price
                 self._cache.status.last_update = datetime.now()
 
         except Exception as e:
@@ -228,6 +276,18 @@ class IBConnectionManager:
         """Get cached positions."""
         with self._lock:
             return self._cache.positions.copy()
+
+    def get_spy_price(self) -> dict:
+        """Get cached SPY price data."""
+        with self._lock:
+            spy = self._cache.spy_price
+            return {
+                "price": spy.price,
+                "close": spy.close,
+                "change": spy.change,
+                "change_pct": spy.change_pct,
+                "error": None,
+            }
 
     def get_all(self) -> dict:
         """Get all cached data."""

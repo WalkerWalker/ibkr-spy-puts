@@ -383,10 +383,10 @@ async def get_spy_price():
     """Get current SPY price and daily change.
 
     Returns SPY last price, previous close, and calculated daily change.
-    Works with delayed data if real-time not subscribed.
+    Uses the persistent connection manager's cached data.
     """
-    import asyncio
-    return await asyncio.to_thread(_fetch_spy_price)
+    manager = get_connection_manager()
+    return manager.get_spy_price()
 
 
 def _fetch_spy_price() -> dict:
