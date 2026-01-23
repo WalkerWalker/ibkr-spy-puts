@@ -355,8 +355,8 @@ try:
             errors.append({{'reqId': reqId, 'code': errorCode, 'msg': errorString}})
         ib.errorEvent += on_error
 
-        # Use DELAYED data (type 3) - should work without subscription
-        ib.reqMarketDataType(3)
+        # Use DELAYED-FROZEN data (type 4) - should work without subscription
+        ib.reqMarketDataType(4)
         ib.sleep(0.5)  # Wait for market data type to be set
 
         # Use SMART exchange with delayed data
