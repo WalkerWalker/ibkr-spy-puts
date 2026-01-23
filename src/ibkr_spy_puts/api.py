@@ -240,9 +240,13 @@ def _fetch_live_position_data(positions: list, fetch_greeks: bool = True) -> dic
     # Script to fetch P&L, margin, and optionally Greeks
     script = f'''
 import json
+import math
 import asyncio
 asyncio.set_event_loop(asyncio.new_event_loop())
-from ib_insync import IB, Option, MarketOrder
+from ib_insync import IB, Option, Stock, MarketOrder
+
+def is_valid_price(v):
+    return v is not None and not math.isnan(v) and v > 0
 
 ib = IB()
 result = {{}}
@@ -338,6 +342,39 @@ try:
         # Cancel market data subscriptions
         for opt, ticker in tickers:
             ib.cancelMktData(opt)
+
+    # STEP 5: Fetch SPY stock price (using same connection that works for options)
+    try:
+        spy = Stock("SPY", "SMART", "USD")
+        ib.qualifyContracts(spy)
+        spy_ticker = ib.reqMktData(spy, "", False, False)
+        ib.sleep(2)
+
+        spy_data = {{}}
+        if is_valid_price(spy_ticker.last):
+            spy_data['price'] = spy_ticker.last
+        elif is_valid_price(spy_ticker.bid) and is_valid_price(spy_ticker.ask):
+            spy_data['price'] = (spy_ticker.bid + spy_ticker.ask) / 2
+
+        if is_valid_price(spy_ticker.close):
+            spy_data['close'] = spy_ticker.close
+
+        if spy_data.get('price') and spy_data.get('close'):
+            spy_data['change'] = round(spy_data['price'] - spy_data['close'], 2)
+            spy_data['change_pct'] = round((spy_data['change'] / spy_data['close']) * 100, 2)
+
+        # Include raw values for debugging
+        spy_data['debug'] = {{
+            'last': str(spy_ticker.last),
+            'bid': str(spy_ticker.bid),
+            'ask': str(spy_ticker.ask),
+            'close': str(spy_ticker.close),
+        }}
+
+        result['spy'] = spy_data
+        ib.cancelMktData(spy)
+    except Exception as e:
+        result['spy'] = {{'error': str(e)}}
 
     ib.disconnect()
 except Exception as e:
