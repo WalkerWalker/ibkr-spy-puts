@@ -72,6 +72,8 @@ services:
     image: ${TRADING_BOT_IMAGE:-ibkr-spy-puts-trading-bot}
     build: .
     container_name: ibkr-bot
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       # Trading mode (paper or live) - determines database selection
       TRADING_MODE: ${TRADING_MODE:-paper}

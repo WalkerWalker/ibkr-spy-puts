@@ -607,6 +607,57 @@ async def api_connection_status():
     return result["connection"]
 
 
+@app.post("/api/gateway/restart")
+async def restart_gateway():
+    """Restart the IB Gateway container to trigger re-authentication.
+
+    This restarts the ib-gateway Docker container which will prompt for 2FA.
+    Uses the Docker socket API directly (works from inside containers).
+    """
+    import asyncio
+    import socket
+    import http.client
+
+    def restart_via_docker_socket():
+        """Call Docker API via Unix socket to restart the gateway container."""
+        container_name = "ibkr-gateway"
+        socket_path = "/var/run/docker.sock"
+
+        # Check if Docker socket exists
+        if not Path(socket_path).exists():
+            return {"success": False, "error": "Docker socket not available"}
+
+        # Create connection to Docker socket
+        class DockerSocket(http.client.HTTPConnection):
+            def __init__(self):
+                super().__init__("localhost")
+
+            def connect(self):
+                self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.sock.connect(socket_path)
+
+        try:
+            conn = DockerSocket()
+            conn.request("POST", f"/containers/{container_name}/restart?t=10")
+            response = conn.getresponse()
+
+            if response.status == 204:
+                return {"success": True, "message": "Gateway restart initiated"}
+            elif response.status == 404:
+                return {"success": False, "error": f"Container {container_name} not found"}
+            else:
+                body = response.read().decode()
+                return {"success": False, "error": f"Docker API error: {response.status} - {body}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    try:
+        result = await asyncio.to_thread(restart_via_docker_socket)
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/api/live-orders")
 async def api_live_orders():
     """Get all live orders from IBKR."""

@@ -260,6 +260,45 @@
             margin-left: 10px;
         }
 
+        /* Login button styles */
+        .login-btn {
+            background: #0f3460;
+            color: #00d4ff;
+            border: 1px solid #00d4ff;
+            padding: 6px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .login-btn:hover {
+            background: #00d4ff;
+            color: #16213e;
+        }
+        .login-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        .login-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #00d4ff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .logging-in-text {
+            color: #00d4ff;
+            font-size: 13px;
+        }
+
         /* Verified icon */
         .verified-icon {
             color: #00ff88;
@@ -337,25 +376,18 @@
             {% if connection.ready_to_trade %}
                 <div class="status-detail">
                     <span class="label">Mode:</span>
-                    <span class="value {% if connection.trading_mode == 'PAPER' %}paper{% else %}live{% endif %}">
+                    <span id="trading-mode" class="value {% if connection.trading_mode == 'PAPER' %}paper{% else %}live{% endif %}">
                         {{ connection.trading_mode }}
                     </span>
                 </div>
-                <div class="status-detail">
+                <div class="status-detail" id="account-container">
                     <span class="label">Account:</span>
-                    <span class="value">{{ connection.account }}</span>
+                    <span id="account-value" class="value">{{ connection.account }}</span>
                 </div>
             {% else %}
-                <div class="status-detail">
-                    <span class="label">Port:</span>
-                    <span class="value">{{ connection.tws_port }}</span>
+                <div class="status-detail" id="login-container">
+                    <button id="login-btn" class="login-btn" onclick="initiateLogin()">Login</button>
                 </div>
-                {% if connection.error %}
-                <div class="status-detail">
-                    <span class="label">Error:</span>
-                    <span class="value" style="color: #ff6666;">Connection refused</span>
-                </div>
-                {% endif %}
             {% endif %}
             <div class="status-detail">
                 <span class="label">Next Trade:</span>
@@ -841,6 +873,122 @@
 
         // Full page refresh every 5 minutes for order/position updates
         setTimeout(() => location.reload(), 300000);
+
+        // Login functionality
+        let isLoggingIn = false;
+
+        async function initiateLogin() {
+            if (isLoggingIn) return;
+            isLoggingIn = true;
+
+            const loginContainer = document.getElementById('login-container');
+            const loginBtn = document.getElementById('login-btn');
+
+            // Show spinning indicator
+            if (loginContainer) {
+                loginContainer.innerHTML = '<span class="login-spinner"></span><span class="logging-in-text">Restarting gateway...</span>';
+            }
+
+            try {
+                // Call restart endpoint
+                const response = await fetch('/api/gateway/restart', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    // Update text
+                    if (loginContainer) {
+                        loginContainer.innerHTML = '<span class="login-spinner"></span><span class="logging-in-text">Waiting for 2FA...</span>';
+                    }
+
+                    // Poll for connection status
+                    pollForLogin();
+                } else {
+                    // Show error
+                    if (loginContainer) {
+                        loginContainer.innerHTML = `<span style="color: #ff6666;">Error: ${data.error}</span>`;
+                    }
+                    isLoggingIn = false;
+                }
+            } catch (error) {
+                if (loginContainer) {
+                    loginContainer.innerHTML = '<span style="color: #ff6666;">Failed to restart gateway</span>';
+                }
+                isLoggingIn = false;
+            }
+        }
+
+        async function pollForLogin() {
+            const loginContainer = document.getElementById('login-container');
+            const statusDot = document.getElementById('status-dot');
+            const statusText = document.getElementById('status-text');
+            const statusDetails = document.getElementById('status-details');
+
+            let attempts = 0;
+            const maxAttempts = 60;  // 2 minutes max
+
+            const checkLogin = async () => {
+                attempts++;
+
+                try {
+                    const response = await fetch('/api/connection-status');
+                    const data = await response.json();
+
+                    if (data.logged_in && data.account) {
+                        // Successfully logged in!
+                        isLoggingIn = false;
+
+                        // Update status indicator
+                        statusDot.className = 'status-dot ready';
+                        statusText.className = 'status-text ready';
+                        statusText.textContent = 'Ready to Trade';
+
+                        // Replace login button with account info
+                        if (loginContainer) {
+                            loginContainer.outerHTML = `
+                                <div class="status-detail">
+                                    <span class="label">Mode:</span>
+                                    <span id="trading-mode" class="value ${data.trading_mode === 'PAPER' ? 'paper' : 'live'}">
+                                        ${data.trading_mode}
+                                    </span>
+                                </div>
+                                <div class="status-detail" id="account-container">
+                                    <span class="label">Account:</span>
+                                    <span id="account-value" class="value">${data.account}</span>
+                                </div>
+                            `;
+                        }
+
+                        // Refresh data
+                        fetchLivePositions();
+                        fetchSpyPrice();
+                        return;
+                    }
+
+                    // Not yet logged in
+                    if (attempts < maxAttempts) {
+                        setTimeout(checkLogin, 2000);  // Check every 2 seconds
+                    } else {
+                        // Timeout
+                        if (loginContainer) {
+                            loginContainer.innerHTML = '<button id="login-btn" class="login-btn" onclick="initiateLogin()">Retry Login</button>';
+                        }
+                        isLoggingIn = false;
+                    }
+                } catch (error) {
+                    if (attempts < maxAttempts) {
+                        setTimeout(checkLogin, 2000);
+                    } else {
+                        if (loginContainer) {
+                            loginContainer.innerHTML = '<button id="login-btn" class="login-btn" onclick="initiateLogin()">Retry Login</button>';
+                        }
+                        isLoggingIn = false;
+                    }
+                }
+            };
+
+            // Start checking after a delay (gateway needs time to restart)
+            setTimeout(checkLogin, 5000);
+        }
     </script>
 </body>
 </html>
