@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from ib_insync import IB, ExecutionFilter, MarketOrder, Option, Stock
+from ib_insync import IB, MarketOrder, Option, Stock
 
 from ibkr_spy_puts.config import TWSSettings
 
@@ -83,7 +83,6 @@ class CachedData:
     status: ConnectionStatus = field(default_factory=ConnectionStatus)
     orders: list[dict] = field(default_factory=list)
     positions: list[PositionData] = field(default_factory=list)
-    executions: list[dict] = field(default_factory=list)
     spy_price: SpyPrice = field(default_factory=SpyPrice)
     last_update: datetime | None = None
 
@@ -120,10 +119,6 @@ class IBConnectionManager:
 
         # Database positions (refreshed periodically)
         self._db_positions: list[dict] = []
-
-        # Update counters for less-frequent updates
-        self._update_count = 0
-        self._executions_interval = 720  # Every 720 cycles (~1 hour at 5 sec/cycle)
 
     def start(self):
         """Start the connection manager in a background thread."""
@@ -326,46 +321,6 @@ class IBConnectionManager:
         with self._lock:
             self._cache.orders = orders
 
-    def _update_executions(self):
-        """Update cached executions from the last 7 days."""
-        from datetime import timedelta
-
-        try:
-            # Request executions from the last 7 days
-            week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d-00:00:00")
-            exec_filter = ExecutionFilter(time=week_ago, symbol="SPY", secType="OPT")
-
-            fills = self.ib.reqExecutions(exec_filter)
-            self.ib.sleep(1)
-
-            executions = []
-            for fill in fills:
-                c = fill.contract
-                e = fill.execution
-                cr = fill.commissionReport
-
-                exec_data = {
-                    "symbol": c.symbol,
-                    "strike": c.strike,
-                    "expiration": c.lastTradeDateOrContractMonth,
-                    "right": c.right,
-                    "action": e.side,  # BOT or SLD
-                    "quantity": int(e.shares),
-                    "price": e.price,
-                    "exec_time": e.time.isoformat() if e.time else None,
-                    "exec_id": e.execId,
-                    "order_id": e.orderId,
-                    "commission": cr.commission if cr else None,
-                    "realized_pnl": cr.realizedPNL if cr and cr.realizedPNL else None,
-                }
-                executions.append(exec_data)
-
-            with self._lock:
-                self._cache.executions = executions
-
-        except Exception as e:
-            logger.error(f"Failed to update executions: {e}")
-
     def _calculate_margin(self, contract: Option, quantity: int) -> float | None:
         """Calculate margin for a position using whatIfOrder."""
         try:
@@ -469,16 +424,9 @@ class IBConnectionManager:
     def _update_cache(self):
         """Update all cached data."""
         try:
-            self._update_count += 1
-
-            # Always update these (streaming data)
             self._update_spy_price()
             self._update_orders()
             self._update_positions()
-
-            # Update executions less frequently (~once per hour)
-            if self._update_count % self._executions_interval == 1:
-                self._update_executions()
 
             with self._lock:
                 self._cache.status.last_update = datetime.now()
@@ -527,11 +475,6 @@ class IBConnectionManager:
         """Get cached orders."""
         with self._lock:
             return self._cache.orders.copy()
-
-    def get_executions(self) -> list[dict]:
-        """Get cached executions from the last 7 days."""
-        with self._lock:
-            return self._cache.executions.copy()
 
     def get_positions(self) -> list[dict]:
         """Get cached enriched positions."""

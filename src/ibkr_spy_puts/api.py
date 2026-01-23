@@ -337,23 +337,6 @@ async def api_live_orders():
     return {"orders": result["live_orders"], "connected": result["connection"]["connected"]}
 
 
-@app.get("/api/executions")
-async def api_executions():
-    """Get recent executions with commission data from IBKR.
-
-    Returns SPY option fills from the last 7 days including commission info.
-    Data comes from the connection manager's cache.
-    """
-    manager = get_connection_manager()
-    status = manager.get_status()
-
-    return {
-        "executions": manager.get_executions(),
-        "connected": status.get("connected", False),
-        "error": status.get("error"),
-    }
-
-
 # =============================================================================
 # Dashboard Pages
 # =============================================================================
