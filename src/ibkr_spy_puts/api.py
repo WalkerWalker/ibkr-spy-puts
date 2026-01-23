@@ -357,13 +357,14 @@ try:
 
         # Use DELAYED data (type 3) - should work without subscription
         ib.reqMarketDataType(3)
+        ib.sleep(0.5)  # Wait for market data type to be set
 
         # Use SMART exchange with delayed data
         spy = Stock("SPY", "SMART", "USD")
         ib.qualifyContracts(spy)
         # Request delayed market data
         spy_ticker = ib.reqMktData(spy, "", False, False)
-        ib.sleep(3)
+        ib.sleep(5)  # Wait longer for delayed data
 
         spy_data = {{}}
         spy_data['exchange'] = spy.exchange
