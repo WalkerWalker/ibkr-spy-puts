@@ -151,14 +151,13 @@ class IBConnectionManager:
     def _subscribe_spy_data(self):
         """Subscribe to SPY market data."""
         try:
-            # Use delayed data (type 3) if real-time not available
-            self.ib.reqMarketDataType(3)
+            # Use live data (type 1) - we have Cboe One subscription for BATS
+            self.ib.reqMarketDataType(1)
 
-            # Try BATS exchange (part of Cboe, covered by Cboe One subscription)
-            # instead of SMART which routes to ARCA
+            # Use BATS exchange (part of Cboe, covered by Cboe One subscription)
             self._spy_contract = Stock("SPY", "BATS", "USD")
             self._spy_ticker = self.ib.reqMktData(self._spy_contract, "", False, False)
-            logger.info("Subscribed to SPY market data via BATS")
+            logger.info("Subscribed to SPY live market data via BATS")
         except Exception as e:
             logger.error(f"Failed to subscribe to SPY data: {e}")
 
