@@ -891,6 +891,21 @@
                 const priceEl = document.getElementById('spy-price');
                 const changeEl = document.getElementById('spy-change');
 
+                if (data.error === 'No subscription') {
+                    // No market data subscription for SPY
+                    if (priceEl) {
+                        priceEl.textContent = 'N/A';
+                        priceEl.className = 'metric-value neutral';
+                        priceEl.title = 'Requires IBKR market data subscription';
+                    }
+                    if (changeEl) {
+                        changeEl.textContent = 'No subscription';
+                        changeEl.className = 'metric-value neutral';
+                        changeEl.style.fontSize = '12px';
+                    }
+                    return;
+                }
+
                 if (data.price && priceEl) {
                     priceEl.textContent = `$${data.price.toFixed(2)}`;
                     priceEl.className = 'metric-value neutral';

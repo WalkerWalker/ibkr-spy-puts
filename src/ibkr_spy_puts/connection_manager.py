@@ -281,6 +281,15 @@ class IBConnectionManager:
         """Get cached SPY price data."""
         with self._lock:
             spy = self._cache.spy_price
+            # If no price data, it's likely a subscription issue
+            if spy.price is None:
+                return {
+                    "price": None,
+                    "close": None,
+                    "change": None,
+                    "change_pct": None,
+                    "error": "No subscription",
+                }
             return {
                 "price": spy.price,
                 "close": spy.close,
