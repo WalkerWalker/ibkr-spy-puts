@@ -638,6 +638,9 @@
     </div>
 
     <script>
+        // Global state for login process
+        let isLoggingIn = false;
+
         // Toggle collapsible sections
         function toggleSection(id) {
             const content = document.getElementById(id);
@@ -657,6 +660,7 @@
 
                 const statusDot = document.getElementById('status-dot');
                 const statusText = document.getElementById('status-text');
+                const statusDetails = document.getElementById('status-details');
                 const lastCheck = document.getElementById('last-check');
 
                 // Update status indicator
@@ -668,6 +672,41 @@
                     statusDot.className = 'status-dot not-ready';
                     statusText.className = 'status-text not-ready';
                     statusText.textContent = 'Not Connected';
+                }
+
+                // Update the details section (login button vs account info)
+                if (statusDetails) {
+                    const nextTradeTime = data.next_trade_time || '09:35';
+
+                    if (data.logged_in && data.account) {
+                        // Show account info
+                        const modeClass = data.trading_mode === 'PAPER' ? 'paper' : 'live';
+                        statusDetails.innerHTML = `
+                            <div class="status-detail">
+                                <span class="label">Mode:</span>
+                                <span id="trading-mode" class="value ${modeClass}">${data.trading_mode}</span>
+                            </div>
+                            <div class="status-detail" id="account-container">
+                                <span class="label">Account:</span>
+                                <span id="account-value" class="value">${data.account}</span>
+                            </div>
+                            <div class="status-detail">
+                                <span class="label">Next Trade:</span>
+                                <span class="value">${nextTradeTime} ET</span>
+                            </div>
+                        `;
+                    } else if (!isLoggingIn) {
+                        // Show login button (only if not currently logging in)
+                        statusDetails.innerHTML = `
+                            <div class="status-detail" id="login-container">
+                                <button id="login-btn" class="login-btn" onclick="initiateLogin()">Login</button>
+                            </div>
+                            <div class="status-detail">
+                                <span class="label">Next Trade:</span>
+                                <span class="value">${nextTradeTime} ET</span>
+                            </div>
+                        `;
+                    }
                 }
 
                 // Update last check time
@@ -875,8 +914,6 @@
         setTimeout(() => location.reload(), 300000);
 
         // Login functionality
-        let isLoggingIn = false;
-
         async function initiateLogin() {
             if (isLoggingIn) return;
             isLoggingIn = true;
