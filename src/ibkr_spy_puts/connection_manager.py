@@ -151,12 +151,12 @@ class IBConnectionManager:
     def _subscribe_spy_data(self):
         """Set up SPY contract for price fetching."""
         try:
-            # Use live data (type 1) - we have Cboe One subscription for BATS
-            self.ib.reqMarketDataType(1)
+            # Use delayed data (type 3) which is always available
+            self.ib.reqMarketDataType(3)
 
-            # Use BATS exchange (part of Cboe, covered by Cboe One subscription)
-            self._spy_contract = Stock("SPY", "BATS", "USD")
-            logger.info("SPY contract configured for BATS exchange")
+            # Use SMART exchange - will route to best available
+            self._spy_contract = Stock("SPY", "SMART", "USD")
+            logger.info("SPY contract configured for SMART exchange with delayed data")
         except Exception as e:
             logger.error(f"Failed to set up SPY contract: {e}")
 
@@ -205,9 +205,11 @@ class IBConnectionManager:
             spy_price = SpyPrice(last_update=datetime.now())
             if self._spy_contract:
                 try:
+                    # Set delayed data type before each request
+                    self.ib.reqMarketDataType(3)
                     # Request snapshot (not streaming subscription)
                     ticker = self.ib.reqMktData(self._spy_contract, "", True, False)
-                    self.ib.sleep(1)  # Wait for data
+                    self.ib.sleep(2)  # Wait for data
 
                     # Helper to check if value is valid (not None, not nan, positive)
                     def is_valid(v):
