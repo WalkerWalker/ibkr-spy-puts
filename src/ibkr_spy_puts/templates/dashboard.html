@@ -667,25 +667,22 @@
                 const response = await fetch('/api/positions/live');
                 const data = await response.json();
 
-                // Handle new response format with data_source
-                const positions = data.positions || data;  // Fallback for old format
-                const dataSource = data.data_source || 'live';
-                const snapshotTime = data.snapshot_time;
-                const snapshotSummary = data.snapshot_summary;
+                const positions = data.positions || data;
+                const marketOpen = data.market_open;
 
                 let totalUnrealizedPnl = 0;
                 let totalDelta = 0;
                 let totalTheta = 0;
                 let totalMargin = 0;
-                let hasLiveData = dataSource === 'live';
-                let hasPnlData = false;  // Track if we have any P&L data
-                let hasDeltaData = false;  // Track if we have any delta data
+                let hasPnlData = false;
+                let hasDeltaData = false;
+                let hasMarginData = false;
 
                 for (const pos of positions) {
                     const row = document.querySelector(`tr.position-row[data-position-id="${pos.id}"]`);
                     if (!row) continue;
 
-                    // Update P&L $ column
+                    // Update P&L $ column (always available from portfolio)
                     const pnlDollarsEl = row.querySelector('.pnl-dollars');
                     if (pos.unrealized_pnl !== undefined && pos.unrealized_pnl !== null && pnlDollarsEl) {
                         const pnlText = pos.unrealized_pnl >= 0 ?
@@ -707,27 +704,27 @@
                         pnlPctEl.className = 'pnl-pct ' + (pos.unrealized_pnl_pct >= 0 ? 'positive' : 'negative');
                     }
 
-                    // Update Delta in the row (SPY equivalent shares)
+                    // Update Delta in the row (only available during market hours)
                     const deltaEl = row.querySelector('.delta');
                     if (pos.delta !== undefined && pos.delta !== null && deltaEl) {
                         const spyDelta = Math.abs(pos.delta) * 100 * (pos.quantity || 1);
                         deltaEl.textContent = `${spyDelta.toFixed(0)} SPY`;
+                        totalDelta += spyDelta;
+                        hasDeltaData = true;
+                    } else if (deltaEl) {
+                        deltaEl.textContent = '--';
                     }
 
-                    // Update Margin in the row
+                    // Update Margin in the row (always available from whatIfOrder)
                     const marginEl = row.querySelector('.margin');
                     if (pos.margin !== undefined && pos.margin !== null && marginEl) {
                         const posMargin = pos.margin * (pos.quantity || 1);
                         marginEl.textContent = `$${posMargin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
                         totalMargin += posMargin;
+                        hasMarginData = true;
                     }
 
-                    // Accumulate Greeks
-                    if (pos.delta !== undefined && pos.delta !== null) {
-                        const positionDelta = Math.abs(pos.delta) * 100 * (pos.quantity || 1);
-                        totalDelta += positionDelta;
-                        hasDeltaData = true;
-                    }
+                    // Accumulate Theta (only available during market hours)
                     if (pos.theta !== undefined && pos.theta !== null) {
                         const positionTheta = Math.abs(pos.theta) * 100 * (pos.quantity || 1);
                         totalTheta += positionTheta;
@@ -740,95 +737,55 @@
                 const totalThetaEl = document.getElementById('total-theta');
                 const totalMarginEl = document.getElementById('total-margin');
 
-                // Margin is always available via whatIfOrder (works even when market closed)
-                // Always show sum of individual margins
+                // P&L - always available from portfolio
+                if (unrealizedPnlEl) {
+                    if (hasPnlData) {
+                        unrealizedPnlEl.textContent = `$${totalUnrealizedPnl.toFixed(2)}`;
+                        unrealizedPnlEl.className = 'metric-value ' + (totalUnrealizedPnl >= 0 ? 'positive' : 'negative');
+                    } else {
+                        unrealizedPnlEl.textContent = '--';
+                        unrealizedPnlEl.className = 'metric-value neutral';
+                    }
+                }
+
+                // Margin - always available from whatIfOrder
                 if (totalMarginEl) {
-                    if (totalMargin > 0) {
+                    if (hasMarginData) {
                         totalMarginEl.textContent = `$${totalMargin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
-                    } else if (snapshotSummary && snapshotSummary.maintenance_margin !== null) {
-                        totalMarginEl.textContent = `$${snapshotSummary.maintenance_margin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
                     } else {
                         totalMarginEl.textContent = '--';
                     }
                 }
 
-                if (hasLiveData) {
-                    // Use live calculated data for P&L and Greeks
-                    if (unrealizedPnlEl) {
-                        if (hasPnlData) {
-                            unrealizedPnlEl.textContent = `$${totalUnrealizedPnl.toFixed(2)}`;
-                            unrealizedPnlEl.className = 'metric-value ' + (totalUnrealizedPnl >= 0 ? 'positive' : 'negative');
-                        } else {
-                            unrealizedPnlEl.textContent = '--';
-                            unrealizedPnlEl.className = 'metric-value neutral';
-                        }
-                    }
-                    if (totalDeltaEl) {
-                        if (hasDeltaData) {
-                            totalDeltaEl.textContent = `${totalDelta.toFixed(0)} SPY`;
-                        } else {
-                            totalDeltaEl.textContent = '-- SPY';
-                        }
-                    }
-                    if (totalThetaEl) {
-                        if (hasDeltaData) {  // theta comes with delta
-                            totalThetaEl.textContent = `+$${totalTheta.toFixed(0)}/day`;
-                        } else {
-                            totalThetaEl.textContent = '--/day';
-                        }
-                    }
-                } else if (snapshotSummary) {
-                    // Use snapshot data for P&L and Greeks
-                    if (unrealizedPnlEl && snapshotSummary.unrealized_pnl !== null) {
-                        const pnl = snapshotSummary.unrealized_pnl;
-                        unrealizedPnlEl.textContent = `$${pnl.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
-                        unrealizedPnlEl.className = 'metric-value ' + (pnl >= 0 ? 'positive' : 'negative');
-                    }
-                    if (totalDeltaEl && snapshotSummary.total_delta !== null) {
-                        const delta = Math.abs(snapshotSummary.total_delta) * 100;
-                        totalDeltaEl.textContent = `${delta.toFixed(0)} SPY`;
-                    }
-                    if (totalThetaEl && snapshotSummary.total_theta !== null) {
-                        const theta = Math.abs(snapshotSummary.total_theta) * 100;
-                        totalThetaEl.textContent = `+$${theta.toFixed(0)}/day`;
-                    }
-                } else {
-                    // No data at all
-                    if (unrealizedPnlEl) {
-                        unrealizedPnlEl.textContent = '--';
-                        unrealizedPnlEl.className = 'metric-value neutral';
-                    }
-                    if (totalDeltaEl) {
+                // Delta - only available during market hours
+                if (totalDeltaEl) {
+                    if (hasDeltaData) {
+                        totalDeltaEl.textContent = `${totalDelta.toFixed(0)} SPY`;
+                    } else {
                         totalDeltaEl.textContent = '-- SPY';
                     }
-                    if (totalThetaEl) {
+                }
+
+                // Theta - only available during market hours
+                if (totalThetaEl) {
+                    if (hasDeltaData) {  // theta comes with delta
+                        totalThetaEl.textContent = `+$${totalTheta.toFixed(0)}/day`;
+                    } else {
                         totalThetaEl.textContent = '--/day';
                     }
                 }
 
-                // Update last fetch time with data source indicator
+                // Update status indicator
                 const updateEl = document.getElementById('positions-last-update');
-                const marketOpen = data.market_open;
                 if (updateEl) {
-                    if (marketOpen && hasLiveData) {
-                        updateEl.textContent = `Live Data - Updated ${new Date().toLocaleTimeString()}`;
+                    const now = new Date().toLocaleTimeString();
+                    if (marketOpen) {
+                        updateEl.textContent = `Live Data - Updated ${now}`;
                         updateEl.style.color = '#00ff88';
-                    } else if (marketOpen === false) {
-                        // Market is closed
-                        if (snapshotTime) {
-                            const snapDate = new Date(snapshotTime);
-                            updateEl.textContent = `Market Closed - Snapshot from ${snapDate.toLocaleDateString()}`;
-                        } else {
-                            updateEl.textContent = `Market Closed (${new Date().toLocaleTimeString()})`;
-                        }
-                        updateEl.style.color = '#ffaa00';
-                    } else if (snapshotTime) {
-                        const snapDate = new Date(snapshotTime);
-                        updateEl.textContent = `Using Snapshot from ${snapDate.toLocaleString()}`;
-                        updateEl.style.color = '#ffaa00';
                     } else {
-                        updateEl.textContent = `No Data Available (${new Date().toLocaleTimeString()})`;
-                        updateEl.style.color = '#888';
+                        // Market closed but we still have live P&L and margin
+                        updateEl.textContent = `Market Closed - Live P&L/Margin (${now})`;
+                        updateEl.style.color = '#00ff88';  // Still green since data is live
                     }
                 }
 
