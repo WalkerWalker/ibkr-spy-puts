@@ -100,12 +100,15 @@ class IBConnectionManager:
                 self._ensure_connected()
                 if self.ib.isConnected():
                     self._update_cache()
+                    # Use ib.sleep to keep event loop processing for market data updates
+                    self.ib.sleep(5)
+                else:
+                    # Not connected, use regular wait
+                    self._stop_event.wait(5)
             except Exception as e:
                 logger.error(f"Connection manager error: {e}")
                 self._update_status(connected=False, error=str(e))
-
-            # Wait before next update (5 seconds)
-            self._stop_event.wait(5)
+                self._stop_event.wait(5)
 
         # Cleanup
         if self.ib.isConnected():
