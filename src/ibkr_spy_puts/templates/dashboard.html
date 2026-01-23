@@ -315,62 +315,10 @@
             padding: 5px 15px;
             border-bottom: none;
         }
-        /* Header row with SPY price */
-        .header-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-        .header-row h1 {
-            margin-bottom: 0;
-        }
-        .spy-price-display {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            background: #16213e;
-            padding: 10px 20px;
-            border-radius: 8px;
-            border: 1px solid #0f3460;
-        }
-        .spy-label {
-            color: #00d4ff;
-            font-weight: 700;
-            font-size: 16px;
-        }
-        .spy-price {
-            font-size: 24px;
-            font-weight: 700;
-            color: #fff;
-        }
-        .spy-change {
-            font-size: 16px;
-            font-weight: 600;
-            padding: 4px 10px;
-            border-radius: 4px;
-        }
-        .spy-change.positive {
-            color: #00ff88;
-            background: rgba(0, 255, 136, 0.1);
-        }
-        .spy-change.negative {
-            color: #ff4444;
-            background: rgba(255, 68, 68, 0.1);
-        }
     </style>
 </head>
 <body>
-    <div class="header-row">
-        <h1>SPY Put Strategy Dashboard</h1>
-        <div class="spy-price-display" id="spy-price-display">
-            <span class="spy-label">SPY</span>
-            <span class="spy-price" id="spy-price">--</span>
-            <span class="spy-change" id="spy-change">--</span>
-        </div>
-    </div>
+    <h1>SPY Put Strategy Dashboard</h1>
 
     <!-- Connection Status Bar -->
     <div class="status-bar" id="status-bar">
@@ -435,7 +383,11 @@
         </div>
 
         <div class="card">
-            <h2>P&L</h2>
+            <h2>Book Summary</h2>
+            <div class="metric">
+                <span class="metric-label">Unrealized P&L</span>
+                <span id="unrealized-pnl" class="metric-value neutral">--</span>
+            </div>
             <div class="metric">
                 <span class="metric-label">Realized P&L</span>
                 <span class="metric-value {% if (summary.realized_pnl or 0) >= 0 %}positive{% else %}negative{% endif %}">
@@ -443,24 +395,28 @@
                 </span>
             </div>
             <div class="metric">
-                <span class="metric-label">Unrealized P&L</span>
-                <span id="unrealized-pnl" class="metric-value neutral">--</span>
-            </div>
-            <div class="metric">
                 <span class="metric-label">Maintenance Margin</span>
                 <span id="total-margin" class="metric-value neutral">--</span>
             </div>
-        </div>
-
-        <div class="card">
-            <h2>Greeks (All Positions)</h2>
             <div class="metric">
                 <span class="metric-label">SPY Delta</span>
                 <span id="total-delta" class="metric-value">-- SPY</span>
             </div>
             <div class="metric">
                 <span class="metric-label">Theta Income</span>
-                <span id="total-theta" class="metric-value positive">+$--/day</span>
+                <span id="total-theta" class="metric-value positive">--/day</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>SPY</h2>
+            <div class="metric">
+                <span class="metric-label">Price</span>
+                <span id="spy-price" class="metric-value neutral">--</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Daily Change</span>
+                <span id="spy-change" class="metric-value neutral">--</span>
             </div>
         </div>
     </div>
@@ -866,12 +822,13 @@
 
                 if (data.price && priceEl) {
                     priceEl.textContent = `$${data.price.toFixed(2)}`;
+                    priceEl.className = 'metric-value neutral';
                 }
 
                 if (data.change !== undefined && data.change_pct !== undefined && changeEl) {
                     const sign = data.change >= 0 ? '+' : '';
-                    changeEl.textContent = `${sign}${data.change.toFixed(2)} (${sign}${data.change_pct.toFixed(2)}%)`;
-                    changeEl.className = 'spy-change ' + (data.change >= 0 ? 'positive' : 'negative');
+                    changeEl.textContent = `${sign}$${Math.abs(data.change).toFixed(2)} (${sign}${data.change_pct.toFixed(2)}%)`;
+                    changeEl.className = 'metric-value ' + (data.change >= 0 ? 'positive' : 'negative');
                 }
             } catch (error) {
                 console.error('Failed to fetch SPY price:', error);
