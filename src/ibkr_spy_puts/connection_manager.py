@@ -158,20 +158,23 @@ class IBConnectionManager:
             # Use delayed data (type 3) - same as options, more reliable
             self.ib.reqMarketDataType(3)
 
-            # Use SMART exchange - will route to best available
-            self._spy_contract = Stock("SPY", "SMART", "USD")
+            # Create SPY contract with ARCA as primary exchange
+            # (SPY is primarily traded on ARCA/NYSE Arca)
+            self._spy_contract = Stock("SPY", "SMART", "USD", primaryExchange="ARCA")
             qualified = self.ib.qualifyContracts(self._spy_contract)
 
             if not qualified:
                 logger.error("Failed to qualify SPY contract")
                 return
 
+            logger.info(f"SPY contract qualified: conId={self._spy_contract.conId}, exchange={self._spy_contract.exchange}, primaryExchange={self._spy_contract.primaryExchange}")
+
             # Subscribe to streaming market data (not snapshot)
             # snapshot=False means persistent subscription
             self._spy_ticker = self.ib.reqMktData(self._spy_contract, "", False, False)
 
             # Wait for initial data
-            self.ib.sleep(3)
+            self.ib.sleep(5)
 
             logger.info(f"SPY streaming subscription active. Initial: last={self._spy_ticker.last}, bid={self._spy_ticker.bid}, close={self._spy_ticker.close}")
         except Exception as e:
