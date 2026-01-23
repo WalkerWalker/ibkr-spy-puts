@@ -391,14 +391,10 @@ async def get_spy_price():
     """Get current SPY price and daily change.
 
     Returns SPY last price, previous close, and calculated daily change.
-    Uses a subprocess to fetch fresh data from IBKR.
+    Uses the persistent connection manager's streaming subscription.
     """
-    import asyncio
-    result = await asyncio.to_thread(_fetch_spy_price)
-    # If no error but no price, report as subscription issue
-    if not result.get("error") and not result.get("price"):
-        result["error"] = "No data available"
-    return result
+    manager = get_connection_manager()
+    return manager.get_spy_price()
 
 
 def _fetch_spy_price() -> dict:
