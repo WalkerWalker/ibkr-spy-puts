@@ -362,8 +362,9 @@ try:
         # Use SMART exchange with delayed data
         spy = Stock("SPY", "SMART", "USD")
         ib.qualifyContracts(spy)
-        # Request delayed market data
-        spy_ticker = ib.reqMktData(spy, "", False, False)
+        # Request delayed market data with generic tick types valid for delayed
+        # 232 = Generic Last Trade, 236 = Shortable
+        spy_ticker = ib.reqMktData(spy, "232,236", False, False)
         ib.sleep(5)  # Wait longer for delayed data
 
         spy_data = {{}}
