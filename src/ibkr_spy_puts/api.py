@@ -411,28 +411,42 @@ def _fetch_spy_price() -> dict:
 
     script = f'''
 import json
+import math
 import asyncio
 asyncio.set_event_loop(asyncio.new_event_loop())
 from ib_insync import IB, Stock
+
+def is_valid(v):
+    return v is not None and not math.isnan(v) and v > 0
 
 ib = IB()
 result = {{"error": None}}
 
 try:
     ib.connect("{tws_settings.host}", {tws_settings.port}, clientId=98, readonly=True, timeout=10)
-    ib.reqMarketDataType(3)  # Delayed if real-time not available
+    # Use live data (type 1) - Cboe One subscription covers BATS
+    ib.reqMarketDataType(1)
 
-    spy = Stock("SPY", "SMART", "USD")
+    # Use BATS exchange which is covered by Cboe One subscription
+    spy = Stock("SPY", "BATS", "USD")
     ib.qualifyContracts(spy)
     ticker = ib.reqMktData(spy, "", False, False)
-    ib.sleep(2)
+    ib.sleep(3)
 
-    if ticker.last and ticker.last > 0:
+    # Debug: include raw values
+    result["debug"] = {{
+        "last": str(ticker.last),
+        "bid": str(ticker.bid),
+        "ask": str(ticker.ask),
+        "close": str(ticker.close),
+    }}
+
+    if is_valid(ticker.last):
         result["price"] = ticker.last
-    elif ticker.bid and ticker.bid > 0:
+    elif is_valid(ticker.bid) and is_valid(ticker.ask):
         result["price"] = (ticker.bid + ticker.ask) / 2
 
-    if ticker.close and ticker.close > 0:
+    if is_valid(ticker.close):
         result["close"] = ticker.close
 
     if result.get("price") and result.get("close"):
