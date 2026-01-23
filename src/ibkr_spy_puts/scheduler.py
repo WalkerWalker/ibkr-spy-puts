@@ -464,24 +464,27 @@ def create_trade_function(
 def create_snapshot_function(port: int | None = None) -> Callable[[], None]:
     """Create the snapshot function for the scheduler.
 
+    Uses the connection manager's cached data instead of creating a new connection.
+
     Args:
-        port: TWS port override.
+        port: TWS port override (ignored - uses connection manager).
 
     Returns:
         Snapshot function that can be called by the scheduler.
     """
     def capture_snapshot():
-        import asyncio
         from decimal import Decimal
-        from ibkr_spy_puts.config import DatabaseSettings, TWSSettings
+        from ibkr_spy_puts.config import DatabaseSettings
         from ibkr_spy_puts.database import BookSnapshot, Database
+        from ibkr_spy_puts.connection_manager import get_connection_manager
 
-        # ib_insync requires an event loop
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Get data from connection manager (already cached)
+        manager = get_connection_manager()
+        positions = manager.get_positions()
+        spy_data = manager.get_spy_price()
+
+        if not positions:
+            logger.warning("No positions in cache for snapshot")
 
         # Connect to database
         db = Database(settings=DatabaseSettings())
@@ -490,93 +493,57 @@ def create_snapshot_function(port: int | None = None) -> Callable[[], None]:
             return
         logger.info("Connected to database for snapshot capture")
 
-        # Connect to TWS
-        from ibkr_spy_puts.ibkr_client import IBKRClient
-        settings = TWSSettings()
-        if port:
-            settings = TWSSettings(port=port)
-        client = IBKRClient(settings=settings)
-
-        logger.info("Connecting to TWS for snapshot...")
-        if not client.connect():
-            logger.error("Failed to connect to TWS for snapshot")
-            db.disconnect()
-            return
-
         try:
-            # Get open positions from database
-            open_positions = db.get_open_positions()
-            total_contracts = sum(p.quantity for p in open_positions)
-
-            # Get SPY price
-            spy_price = client.get_spy_price()
-            logger.info(f"SPY price: {spy_price}")
-
-            # Get margin used by SPY puts (via whatIfOrder simulation)
-            maintenance_margin = client.get_margin_for_spy_puts()
-            logger.info(f"Margin used by SPY puts: {maintenance_margin}")
-
-            # Get unrealized P&L for SPY puts only (not whole account)
-            positions_for_pnl = [
-                {
-                    "symbol": p.symbol,
-                    "strike": p.strike,
-                    "expiration": p.expiration,
-                    "entry_price": p.entry_price,
-                    "quantity": p.quantity,
-                }
-                for p in open_positions
-            ]
-            unrealized_pnl = client.get_unrealized_pnl_for_spy_puts(positions_for_pnl)
-
-            # Aggregate Greeks from live positions
+            # Aggregate from cached positions
+            total_contracts = sum(p.get("quantity", 0) for p in positions)
             total_delta = Decimal("0")
             total_theta = Decimal("0")
             total_gamma = Decimal("0")
             total_vega = Decimal("0")
+            total_unrealized_pnl = Decimal("0")
+            total_margin = Decimal("0")
 
-            # Fetch Greeks for each position
-            for pos in open_positions:
-                greeks = client.get_option_greeks(
-                    symbol=pos.symbol,
-                    strike=float(pos.strike),
-                    expiration=pos.expiration,
-                    right="P",
-                )
-                if greeks:
-                    qty = pos.quantity
-                    if greeks.get("delta"):
-                        total_delta += Decimal(str(greeks["delta"])) * qty
-                    if greeks.get("theta"):
-                        total_theta += Decimal(str(greeks["theta"])) * qty
-                    if greeks.get("gamma"):
-                        total_gamma += Decimal(str(greeks["gamma"])) * qty
-                    if greeks.get("vega"):
-                        total_vega += Decimal(str(greeks["vega"])) * qty
+            for pos in positions:
+                qty = pos.get("quantity", 0)
+                if pos.get("delta"):
+                    total_delta += Decimal(str(pos["delta"])) * qty
+                if pos.get("theta"):
+                    total_theta += Decimal(str(pos["theta"])) * qty
+                if pos.get("gamma"):
+                    total_gamma += Decimal(str(pos["gamma"])) * qty
+                if pos.get("vega"):
+                    total_vega += Decimal(str(pos["vega"])) * qty
+                if pos.get("unrealized_pnl"):
+                    total_unrealized_pnl += Decimal(str(pos["unrealized_pnl"]))
+                if pos.get("margin"):
+                    total_margin += Decimal(str(pos["margin"])) * qty
+
+            # Get SPY price from cache
+            spy_price = spy_data.get("price")
 
             # Create and save snapshot
             snapshot = BookSnapshot(
                 snapshot_date=date.today(),
                 snapshot_time=datetime.now(timezone.utc),
-                open_positions=len(open_positions),
+                open_positions=len(positions),
                 total_contracts=total_contracts,
                 total_delta=total_delta if total_delta else None,
                 total_theta=total_theta if total_theta else None,
                 total_gamma=total_gamma if total_gamma else None,
                 total_vega=total_vega if total_vega else None,
-                unrealized_pnl=Decimal(str(unrealized_pnl)) if unrealized_pnl else None,
-                maintenance_margin=Decimal(str(maintenance_margin)) if maintenance_margin else None,
+                unrealized_pnl=total_unrealized_pnl if total_unrealized_pnl else None,
+                maintenance_margin=total_margin if total_margin else None,
                 spy_price=Decimal(str(spy_price)) if spy_price else None,
             )
 
             snapshot_id = db.insert_snapshot(snapshot)
             logger.info(f"Book snapshot saved: ID={snapshot_id}")
-            logger.info(f"  Positions: {len(open_positions)}, Contracts: {total_contracts}")
+            logger.info(f"  Positions: {len(positions)}, Contracts: {total_contracts}")
             logger.info(f"  Delta: {total_delta}, Theta: {total_theta}")
-            logger.info(f"  Maintenance Margin: {maintenance_margin}")
+            logger.info(f"  Maintenance Margin: {total_margin}")
+            logger.info(f"  SPY: {spy_price}")
 
         finally:
-            client.disconnect()
             db.disconnect()
             logger.info("Snapshot capture complete")
 
