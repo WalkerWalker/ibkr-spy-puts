@@ -76,7 +76,6 @@ class PositionData:
     unrealized_pnl_pct: float | None = None
     days_to_expiry: int | None = None
     days_in_trade: int | None = None
-    on_ibkr: bool = False  # True if position verified on IBKR
 
 
 @dataclass
@@ -374,8 +373,8 @@ class IBConnectionManager:
         # Subscribe to any new positions
         self._subscribe_option_data()
 
-        # Get IBKR positions to verify DB positions exist
-        ibkr_position_keys = self._get_ibkr_positions()
+        # Fetch IBKR positions (populates cache for template verification)
+        self._get_ibkr_positions()
 
         # Wait for data to arrive
         self.ib.sleep(2)
@@ -415,7 +414,6 @@ class IBConnectionManager:
                 strategy_id=pos.get('strategy_id'),
                 days_to_expiry=(exp_date - today).days,
                 days_in_trade=(today - entry_date).days,
-                on_ibkr=(key in ibkr_position_keys),
             )
 
             # Enrich with live data from ticker
@@ -549,7 +547,6 @@ class IBConnectionManager:
                     "unrealized_pnl_pct": p.unrealized_pnl_pct,
                     "days_to_expiry": p.days_to_expiry,
                     "days_in_trade": p.days_in_trade,
-                    "on_ibkr": p.on_ibkr,
                 })
             return positions
 
