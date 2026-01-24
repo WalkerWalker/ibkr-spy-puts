@@ -76,6 +76,7 @@ class PositionData:
     unrealized_pnl_pct: float | None = None
     days_to_expiry: int | None = None
     days_in_trade: int | None = None
+    on_ibkr: bool = False  # True if position verified on IBKR
 
 
 @dataclass
@@ -335,6 +336,20 @@ class IBConnectionManager:
             logger.debug(f"Failed to calculate margin: {e}")
         return None
 
+    def _get_ibkr_positions(self) -> set[str]:
+        """Get position keys from IBKR to verify against DB."""
+        ibkr_keys = set()
+        try:
+            for pos in self.ib.positions():
+                c = pos.contract
+                if c.secType == "OPT" and pos.position != 0:
+                    exp = getattr(c, "lastTradeDateOrContractMonth", "")
+                    key = self._get_position_key(c.symbol, c.strike, exp)
+                    ibkr_keys.add(key)
+        except Exception as e:
+            logger.debug(f"Failed to get IBKR positions: {e}")
+        return ibkr_keys
+
     def _update_positions(self):
         """Update enriched positions with live data."""
         # Reload positions from DB periodically
@@ -342,6 +357,9 @@ class IBConnectionManager:
 
         # Subscribe to any new positions
         self._subscribe_option_data()
+
+        # Get IBKR positions to verify DB positions exist
+        ibkr_position_keys = self._get_ibkr_positions()
 
         # Wait for data to arrive
         self.ib.sleep(2)
@@ -381,6 +399,7 @@ class IBConnectionManager:
                 strategy_id=pos.get('strategy_id'),
                 days_to_expiry=(exp_date - today).days,
                 days_in_trade=(today - entry_date).days,
+                on_ibkr=(key in ibkr_position_keys),
             )
 
             # Enrich with live data from ticker
@@ -514,6 +533,7 @@ class IBConnectionManager:
                     "unrealized_pnl_pct": p.unrealized_pnl_pct,
                     "days_to_expiry": p.days_to_expiry,
                     "days_in_trade": p.days_in_trade,
+                    "on_ibkr": p.on_ibkr,
                 })
             return positions
 
