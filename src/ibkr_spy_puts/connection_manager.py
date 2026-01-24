@@ -108,7 +108,7 @@ class IBConnectionManager:
         self._cache = CachedData()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # Reentrant lock for nested calls
         self._loop: asyncio.AbstractEventLoop | None = None
 
         # Market data subscriptions
