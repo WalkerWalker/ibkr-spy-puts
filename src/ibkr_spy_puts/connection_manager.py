@@ -61,6 +61,7 @@ class PositionData:
 
     # From IBKR (live)
     current_price: float | None = None
+    price_source: str | None = None  # "bid_ask", "last", "close", or None
     bid: float | None = None
     ask: float | None = None
     delta: float | None = None
@@ -385,11 +386,18 @@ class IBConnectionManager:
             # Enrich with live data from ticker
             ticker = self._option_tickers.get(key)
             if ticker:
-                # Price from bid/ask
+                # Price: prefer bid/ask mid, fallback to last, then close
                 if _is_valid(ticker.bid) and _is_valid(ticker.ask):
                     position_data.current_price = (ticker.bid + ticker.ask) / 2
                     position_data.bid = ticker.bid
                     position_data.ask = ticker.ask
+                    position_data.price_source = "bid_ask"
+                elif _is_valid(ticker.last):
+                    position_data.current_price = ticker.last
+                    position_data.price_source = "last"
+                elif _is_valid(ticker.close):
+                    position_data.current_price = ticker.close
+                    position_data.price_source = "close"
 
                 # Greeks from modelGreeks
                 if ticker.modelGreeks:
@@ -493,6 +501,7 @@ class IBConnectionManager:
                     "expected_sl_price": p.expected_sl_price,
                     "strategy_id": p.strategy_id,
                     "current_price": p.current_price,
+                    "price_source": p.price_source,
                     "bid": p.bid,
                     "ask": p.ask,
                     "delta": p.delta,
