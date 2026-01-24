@@ -518,8 +518,12 @@
                         <td class="pnl-pct">--</td>
                         <td class="delta">--</td>
                         <td class="margin">--</td>
-                        <td class="position-status">
-                            <span class="status unverified">--</span>
+                        <td>
+                            {% if is_verified %}
+                                <span class="status verified">Live</span>
+                            {% else %}
+                                <span class="status unverified">DB Only</span>
+                            {% endif %}
                         </td>
                         <td>
                             {% if connection.ready_to_trade %}
@@ -797,18 +801,6 @@
                         marginEl.textContent = `$${posMargin.toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
                         totalMargin += posMargin;
                         hasMarginData = true;
-                    }
-
-                    // Update Position status (Live vs DB Only)
-                    const posStatusEl = row.querySelector('.position-status span');
-                    if (posStatusEl) {
-                        if (pos.on_ibkr) {
-                            posStatusEl.textContent = 'Live';
-                            posStatusEl.className = 'status verified';
-                        } else {
-                            posStatusEl.textContent = 'DB Only';
-                            posStatusEl.className = 'status unverified';
-                        }
                     }
 
                     // Accumulate Theta (only available during market hours)

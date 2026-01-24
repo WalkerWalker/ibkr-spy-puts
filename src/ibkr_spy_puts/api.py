@@ -255,9 +255,6 @@ async def get_connection_and_orders():
     manager = get_connection_manager()
     data = manager.get_all()
 
-    # Add ibkr_positions (empty - we use enriched positions from DB instead)
-    data["ibkr_positions"] = []
-
     # Add schedule info to connection status
     data["connection"]["tws_host"] = manager.settings.host
     data["connection"]["tws_port"] = manager.settings.port

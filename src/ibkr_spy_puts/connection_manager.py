@@ -85,6 +85,7 @@ class CachedData:
     status: ConnectionStatus = field(default_factory=ConnectionStatus)
     orders: list[dict] = field(default_factory=list)
     positions: list[PositionData] = field(default_factory=list)
+    ibkr_positions: list[dict] = field(default_factory=list)  # Raw IBKR positions
     spy_price: SpyPrice = field(default_factory=SpyPrice)
     last_update: datetime | None = None
 
@@ -337,8 +338,12 @@ class IBConnectionManager:
         return None
 
     def _get_ibkr_positions(self) -> set[str]:
-        """Get position keys from IBKR to verify against DB."""
+        """Get position keys from IBKR to verify against DB.
+
+        Also stores raw IBKR position data in cache for template verification.
+        """
         ibkr_keys = set()
+        ibkr_positions = []
         try:
             for pos in self.ib.positions():
                 c = pos.contract
@@ -346,8 +351,19 @@ class IBConnectionManager:
                     exp = getattr(c, "lastTradeDateOrContractMonth", "")
                     key = self._get_position_key(c.symbol, c.strike, exp)
                     ibkr_keys.add(key)
+                    # Store full position data for template
+                    ibkr_positions.append({
+                        "symbol": c.symbol,
+                        "strike": c.strike,
+                        "expiration": exp,
+                        "right": getattr(c, "right", None),
+                        "quantity": int(pos.position),
+                        "avg_cost": pos.avgCost,
+                    })
         except Exception as e:
             logger.debug(f"Failed to get IBKR positions: {e}")
+        # Update cache with IBKR positions
+        self._cache.ibkr_positions = ibkr_positions
         return ibkr_keys
 
     def _update_positions(self):
@@ -557,6 +573,11 @@ class IBConnectionManager:
                 "error": None,
             }
 
+    def get_ibkr_positions(self) -> list[dict]:
+        """Get raw IBKR positions from cache."""
+        with self._lock:
+            return self._cache.ibkr_positions.copy()
+
     def get_all(self) -> dict:
         """Get all cached data."""
         with self._lock:
@@ -570,6 +591,7 @@ class IBConnectionManager:
                     "error": self._cache.status.error,
                 },
                 "live_orders": self._cache.orders.copy(),
+                "ibkr_positions": self._cache.ibkr_positions.copy(),
                 "positions": self.get_positions(),
                 "spy_price": self.get_spy_price(),
                 "last_update": self._cache.last_update.isoformat() if self._cache.last_update else None,
