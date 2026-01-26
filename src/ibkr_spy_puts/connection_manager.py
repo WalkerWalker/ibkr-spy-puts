@@ -198,6 +198,10 @@ class IBConnectionManager:
                 )
                 logger.info(f"Connected to {trading_mode} account {account}")
 
+                # Request positions for position verification
+                self.ib.reqPositions()
+                self.ib.sleep(2)  # Wait for position updates
+
                 # Subscribe to SPY market data
                 self._subscribe_spy_data()
             else:
@@ -343,12 +347,24 @@ class IBConnectionManager:
         """Get position keys from IBKR to verify against DB.
 
         Also stores raw IBKR position data in cache for template verification.
+
+        Note: On weekends, IBKR's security definition servers are unavailable.
+        Both ib.positions() and ib.portfolio() return contracts with only conId
+        (no symbol/strike/exp). Position verification will not work on weekends
+        until we store conId in the database and match by conId.
         """
         ibkr_keys = set()
         ibkr_positions = []
         try:
-            for pos in self.ib.positions():
+            # Request fresh position update
+            self.ib.reqPositions()
+            self.ib.sleep(1)
+            all_positions = self.ib.positions()
+
+            # Process all positions
+            for pos in all_positions:
                 c = pos.contract
+                # On weekends, secType may be empty or 'UNK' - only OPT works on weekdays
                 if c.secType == "OPT" and pos.position != 0:
                     exp = getattr(c, "lastTradeDateOrContractMonth", "")
                     key = self._get_position_key(c.symbol, c.strike, exp)
@@ -361,9 +377,13 @@ class IBConnectionManager:
                         "right": getattr(c, "right", None),
                         "quantity": int(pos.position),
                         "avg_cost": pos.avgCost,
+                        "con_id": c.conId,  # Store conId for future matching
                     })
+
+            if ibkr_positions:
+                logger.info(f"IBKR option positions: {len(ibkr_positions)}")
         except Exception as e:
-            logger.debug(f"Failed to get IBKR positions: {e}")
+            logger.error(f"Failed to get IBKR positions: {e}")
         # Update cache with IBKR positions
         self._cache.ibkr_positions = ibkr_positions
         return ibkr_keys
