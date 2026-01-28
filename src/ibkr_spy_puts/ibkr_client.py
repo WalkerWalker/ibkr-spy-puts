@@ -301,14 +301,43 @@ class IBKRClient:
         qualified = self.ib.qualifyContracts(*options)
 
         # Request market data and greeks for all options
+        import logging
+        logger = logging.getLogger(__name__)
+
         tickers = []
         for opt in qualified:
             # Request with greeks (generic tick 106 = option greeks)
             ticker = self.ib.reqMktData(opt, "106", False, False)
             tickers.append((opt, ticker))
 
-        # Wait for data
-        self.ib.sleep(3)
+        # Wait for data with retry logic for delta availability
+        # At market open, delta may not be available for all options immediately
+        initial_wait = 5  # Increased from 3s to 5s
+        retry_wait = 3    # Additional wait per retry
+        max_retries = 3
+        min_delta_pct = 0.20  # Require at least 20% to have delta
+
+        self.ib.sleep(initial_wait)
+
+        # Check delta availability and retry if needed
+        for retry in range(max_retries):
+            with_delta = sum(1 for _, t in tickers if t.modelGreeks and t.modelGreeks.delta is not None)
+            total = len(tickers)
+            pct = with_delta / total if total > 0 else 0
+
+            logger.info(f"Delta availability: {with_delta}/{total} ({pct:.1%})")
+
+            if pct >= min_delta_pct:
+                break
+
+            if retry < max_retries - 1:
+                logger.warning(f"Only {pct:.1%} have delta (need {min_delta_pct:.0%}), retrying in {retry_wait}s...")
+                self.ib.sleep(retry_wait)
+        else:
+            # Log final warning after all retries exhausted
+            with_delta = sum(1 for _, t in tickers if t.modelGreeks and t.modelGreeks.delta is not None)
+            pct = with_delta / len(tickers) if tickers else 0
+            logger.warning(f"After {max_retries} retries, only {with_delta}/{len(tickers)} ({pct:.1%}) have delta")
 
         # Collect results
         results = []
@@ -390,6 +419,27 @@ class IBKRClient:
         if not options_with_delta:
             logger.warning("No options with valid delta found")
             return None
+
+        # SAFEGUARD: Require at least one option with delta in reasonable range
+        # If only ATM options have delta (e.g., -0.45 to -0.50), we should NOT trade
+        delta_min = -0.25  # At least this far OTM
+        delta_max = -0.08  # At most this far OTM
+        options_in_range = [opt for opt in options_with_delta if delta_min <= opt.delta <= delta_max]
+
+        if not options_in_range:
+            # Show what deltas ARE available for debugging
+            available_deltas = sorted([opt.delta for opt in options_with_delta])
+            logger.error(
+                f"ABORTING: No option with delta between {delta_min} and {delta_max}. "
+                f"Available deltas: {available_deltas[:5]}...{available_deltas[-5:] if len(available_deltas) > 5 else ''}"
+            )
+            logger.error(
+                "This likely means IBKR only returned delta for ATM options (market open issue). "
+                "Retry later or check connection."
+            )
+            return None
+
+        logger.info(f"{len(options_in_range)} options have delta in target range [{delta_min}, {delta_max}]")
 
         # Sort by distance from target delta
         sorted_options = sorted(
