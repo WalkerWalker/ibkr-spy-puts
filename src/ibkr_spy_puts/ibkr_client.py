@@ -420,26 +420,40 @@ class IBKRClient:
             logger.warning("No options with valid delta found")
             return None
 
-        # SAFEGUARD: Require at least one option with delta in reasonable range
-        # If only ATM options have delta (e.g., -0.45 to -0.50), we should NOT trade
-        delta_min = -0.25  # At least this far OTM
-        delta_max = -0.08  # At most this far OTM
-        options_in_range = [opt for opt in options_with_delta if delta_min <= opt.delta <= delta_max]
+        # SAFEGUARD: Find consecutive strikes that bracket target delta
+        # We need: strike_A with delta > target, strike_B with delta < target
+        # AND they must be adjacent (no missing strike in between)
+        sorted_chain = sorted(chain, key=lambda x: x.strike)
 
-        if not options_in_range:
-            # Show what deltas ARE available for debugging
-            available_deltas = sorted([opt.delta for opt in options_with_delta])
+        boundary_pair = None
+        for i in range(len(sorted_chain) - 1):
+            curr = sorted_chain[i]
+            next_opt = sorted_chain[i + 1]
+
+            # Both consecutive strikes must have delta
+            if curr.delta is None or next_opt.delta is None:
+                continue
+
+            # Check if they bracket target (for puts: delta gets more negative as strike increases)
+            if curr.delta > target_delta > next_opt.delta:
+                boundary_pair = (curr, next_opt)
+                break
+
+        if boundary_pair is None:
+            # Show what we have for debugging
+            with_delta = [(opt.strike, f"{opt.delta:.4f}") for opt in sorted_chain if opt.delta is not None]
             logger.error(
-                f"ABORTING: No option with delta between {delta_min} and {delta_max}. "
-                f"Available deltas: {available_deltas[:5]}...{available_deltas[-5:] if len(available_deltas) > 5 else ''}"
+                f"ABORTING: No consecutive strikes bracket target delta {target_delta}. "
+                f"This means either: (1) all deltas are on one side of target, or "
+                f"(2) there's a gap in delta data at the critical boundary."
             )
-            logger.error(
-                "This likely means IBKR only returned delta for ATM options (market open issue). "
-                "Retry later or check connection."
-            )
+            logger.error(f"Strikes with delta: {with_delta[:10]}{'...' if len(with_delta) > 10 else ''}")
             return None
 
-        logger.info(f"{len(options_in_range)} options have delta in target range [{delta_min}, {delta_max}]")
+        above, below = boundary_pair
+        logger.info(
+            f"Valid boundary: {above.strike} (δ={above.delta:.4f}) > {target_delta} > {below.strike} (δ={below.delta:.4f})"
+        )
 
         # Sort by distance from target delta
         sorted_options = sorted(
