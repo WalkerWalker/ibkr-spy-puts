@@ -48,6 +48,7 @@ services:
       # IBC restart/2FA settings
       AUTO_RESTART_TIME: "11:45 PM"    # Daily restart without 2FA
       TWOFA_TIMEOUT_ACTION: "restart"  # Auto-retry if 2FA times out
+      RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"  # Retry login after 2FA timeout (every 3 min)
     ports:
       - "4001:4001"  # Live API
       - "4002:4002"  # Paper API
