@@ -377,19 +377,9 @@ class PutSellingStrategy:
             order = self.create_trade_order()
             if order is None:
                 logger.warning(f"Attempt {attempt}: No suitable option found")
-                # If we can't find an option, restore cancelled orders and return
-                if all_cancelled_orders:
-                    logger.info("Restoring cancelled orders before returning...")
-                    self.client.restore_cancelled_orders(all_cancelled_orders)
-                return None, TradeResult(
-                    success=False,
-                    order_id=None,
-                    sell_order_id=None,
-                    take_profit_order_id=None,
-                    stop_loss_order_id=None,
-                    message="No suitable option found",
-                    timestamp=datetime.now(),
-                )
+                if attempt < max_retries:
+                    logger.info(f"Retrying option selection...")
+                continue  # Try next attempt
 
             last_order = order
             logger.info(f"Attempt {attempt}: Selected {order.option.symbol} {order.option.strike}P @ ${order.limit_price:.2f}")
@@ -422,7 +412,11 @@ class PutSellingStrategy:
             else:
                 logger.error(f"All {max_retries} attempts failed")
 
-        # All retries exhausted - restore cancelled orders
+        # All retries exhausted
+        if last_order is None:
+            logger.error(f"All {max_retries} attempts failed: No suitable option found")
+
+        # Restore cancelled orders
         if all_cancelled_orders:
             logger.info("All retries failed. Restoring cancelled orders...")
             self.client.restore_cancelled_orders(all_cancelled_orders)
@@ -433,7 +427,7 @@ class PutSellingStrategy:
             sell_order_id=last_result.sell_order_id if last_result else None,
             take_profit_order_id=None,
             stop_loss_order_id=None,
-            message=f"Failed after {max_retries} attempts: {last_result.message if last_result else 'Unknown error'}",
+            message=f"Failed after {max_retries} attempts: {last_result.message if last_result else 'No suitable option found'}",
             timestamp=datetime.now(),
         )
 
