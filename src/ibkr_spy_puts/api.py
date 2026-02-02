@@ -105,6 +105,17 @@ async def get_positions():
         db.disconnect()
 
 
+@app.get("/api/positions/closed")
+async def get_closed_positions(limit: int = 50):
+    """Get closed positions with P&L."""
+    db = get_db()
+    try:
+        positions = db.get_closed_positions_for_display(limit=limit)
+        return serialize_decimal(positions)
+    finally:
+        db.disconnect()
+
+
 @app.get("/api/positions/live")
 async def get_positions_live():
     """Get all open positions enriched with live IBKR data.
@@ -348,6 +359,7 @@ async def dashboard(request: Request):
     db = get_db()
     try:
         positions = db.get_positions_for_display()
+        closed_positions = db.get_closed_positions_for_display(limit=50)
         summary = db.get_strategy_summary()
         trade_history = db.get_trade_history()
 
@@ -359,6 +371,7 @@ async def dashboard(request: Request):
             {
                 "request": request,
                 "positions": positions,
+                "closed_positions": closed_positions,
                 "summary": summary,
                 "trade_history": trade_history,
                 "connection": ibkr_data["connection"],

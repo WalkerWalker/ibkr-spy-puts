@@ -592,15 +592,72 @@
         </div>
     </div>
 
-    <!-- Trade History -->
+    <!-- Closed Positions (Collapsible, collapsed by default) -->
     <div class="card">
-        <div class="collapsible-header" onclick="toggleSection('trade-history')">
+        <div class="collapsible-header collapsed" onclick="toggleSection('closed-positions')">
+            <h2>
+                Closed Positions
+                <span class="section-count">{{ closed_positions|length }}</span>
+            </h2>
+            <span class="collapse-icon">&#9660;</span>
+        </div>
+        <div id="closed-positions" class="collapsible-content collapsed">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Contract</th>
+                        <th>Entry</th>
+                        <th>Exit</th>
+                        <th>P&L $</th>
+                        <th>P&L %</th>
+                        <th>Days Held</th>
+                        <th>Closed</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pos in closed_positions %}
+                    <tr>
+                        <td class="symbol-cell">{{ pos.symbol }} {{ pos.strike|int }}P {{ pos.expiration.strftime('%m/%d') if pos.expiration else '' }}</td>
+                        <td>${{ "%.2f"|format(pos.entry_price) }}</td>
+                        <td>${{ "%.2f"|format(pos.exit_price) if pos.exit_price else '--' }}</td>
+                        <td class="{% if (pos.realized_pnl or 0) >= 0 %}positive{% else %}negative{% endif %}">
+                            {% if pos.realized_pnl is not none %}
+                                {% if pos.realized_pnl >= 0 %}+{% endif %}${{ "%.2f"|format(pos.realized_pnl) }}
+                            {% else %}
+                                --
+                            {% endif %}
+                        </td>
+                        <td class="{% if (pos.realized_pnl_pct or 0) >= 0 %}positive{% else %}negative{% endif %}">
+                            {% if pos.realized_pnl_pct is not none %}
+                                {% if pos.realized_pnl_pct >= 0 %}+{% endif %}{{ "%.1f"|format(pos.realized_pnl_pct) }}%
+                            {% else %}
+                                --
+                            {% endif %}
+                        </td>
+                        <td>{{ pos.days_held or '--' }}</td>
+                        <td>{{ pos.exit_time.strftime('%Y-%m-%d') if pos.exit_time else '--' }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% if not closed_positions %}
+                    <tr>
+                        <td colspan="7" style="text-align: center; color: #666;">No closed positions</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Trade History (Collapsible, collapsed by default) -->
+    <div class="card">
+        <div class="collapsible-header collapsed" onclick="toggleSection('trade-history')">
             <h2>
                 Trade History
                 <span class="section-count">{{ trade_history|length }}</span>
             </h2>
+            <span class="collapse-icon">&#9660;</span>
         </div>
-        <div id="trade-history" class="collapsible-content">
+        <div id="trade-history" class="collapsible-content collapsed">
             <table>
                 <thead>
                     <tr>

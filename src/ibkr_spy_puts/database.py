@@ -328,6 +328,41 @@ class Database:
             """)
             return [dict(row) for row in cur.fetchall()]
 
+    def get_closed_positions_for_display(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Get closed positions with P&L for dashboard display.
+
+        Args:
+            limit: Maximum number of positions to return.
+
+        Returns:
+            List of closed position dicts with P&L calculations.
+        """
+        with self.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    id,
+                    symbol,
+                    strike,
+                    expiration,
+                    quantity,
+                    entry_price,
+                    entry_time,
+                    exit_price,
+                    exit_time,
+                    (entry_price - exit_price) * quantity * 100 as realized_pnl,
+                    CASE WHEN entry_price > 0
+                        THEN ((entry_price - exit_price) / entry_price * 100)
+                        ELSE 0
+                    END as realized_pnl_pct,
+                    (exit_time::date - entry_time::date) as days_held,
+                    strategy_id
+                FROM positions
+                WHERE status = 'CLOSED'
+                ORDER BY exit_time DESC
+                LIMIT %s
+            """, (limit,))
+            return [dict(row) for row in cur.fetchall()]
+
     def get_position_by_contract(
         self, symbol: str, strike: Decimal, expiration: date
     ) -> Position | None:
