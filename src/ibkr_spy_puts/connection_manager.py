@@ -15,9 +15,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from decimal import Decimal
+
 from ib_insync import IB, MarketOrder, Option, Stock
 
-from ibkr_spy_puts.config import TWSSettings
+from ibkr_spy_puts.config import TWSSettings, DatabaseSettings
+from ibkr_spy_puts.database import Database, Trade
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +125,9 @@ class IBConnectionManager:
         # Database positions (refreshed periodically)
         self._db_positions: list[dict] = []
 
+        # Track processed executions to avoid duplicates
+        self._processed_exec_ids: set[str] = set()
+
     def start(self):
         """Start the connection manager in a background thread."""
         if self._thread is not None and self._thread.is_alive():
@@ -204,6 +210,9 @@ class IBConnectionManager:
 
                 # Subscribe to SPY market data
                 self._subscribe_spy_data()
+
+                # Register execution callback for TP/SL fills
+                self._register_execution_callback()
             else:
                 self._update_status(connected=True, logged_in=False)
 
@@ -224,6 +233,161 @@ class IBConnectionManager:
 
         except Exception as e:
             logger.error(f"Failed to subscribe to SPY data: {e}")
+
+    def _register_execution_callback(self):
+        """Register callback to handle order fills (for detecting TP/SL executions)."""
+        # Clear any existing handler to avoid duplicates
+        self.ib.execDetailsEvent.clear()
+        self.ib.execDetailsEvent += self._on_execution
+
+        # Also request any executions from today that we might have missed
+        self._process_todays_executions()
+
+        logger.info("Execution callback registered")
+
+    def _on_execution(self, trade, fill):
+        """Handle execution (fill) events.
+
+        This is called when any order is filled. We're interested in BUY fills
+        on SPY options, which indicate a TP or SL was hit.
+        """
+        try:
+            contract = fill.contract
+            execution = fill.execution
+
+            # Only process SPY option BUY fills (closing trades)
+            if (contract.secType != "OPT" or
+                contract.symbol != "SPY" or
+                execution.side != "BOT"):
+                return
+
+            # Create unique execution ID to avoid processing duplicates
+            exec_id = f"{execution.execId}"
+            if exec_id in self._processed_exec_ids:
+                return
+            self._processed_exec_ids.add(exec_id)
+
+            # Process the closing trade
+            self._process_closing_trade(
+                symbol=contract.symbol,
+                strike=float(contract.strike),
+                expiration=contract.lastTradeDateOrContractMonth,
+                quantity=int(execution.shares),
+                price=float(execution.avgPrice),
+                fill_time=execution.time,
+                exec_id=exec_id,
+            )
+
+        except Exception as e:
+            logger.error(f"Error processing execution: {e}")
+
+    def _process_todays_executions(self):
+        """Process any executions from today that we might have missed."""
+        try:
+            from ib_insync import ExecutionFilter
+
+            today = datetime.now().strftime("%Y%m%d")
+            filt = ExecutionFilter(time=f"{today} 00:00:00")
+
+            executions = self.ib.reqExecutions(filt)
+            logger.info(f"Checking {len(executions)} executions from today")
+
+            for fill in executions:
+                contract = fill.contract
+                execution = fill.execution
+
+                # Only process SPY option BUY fills
+                if (contract.secType != "OPT" or
+                    contract.symbol != "SPY" or
+                    execution.side != "BOT"):
+                    continue
+
+                exec_id = f"{execution.execId}"
+                if exec_id in self._processed_exec_ids:
+                    continue
+                self._processed_exec_ids.add(exec_id)
+
+                self._process_closing_trade(
+                    symbol=contract.symbol,
+                    strike=float(contract.strike),
+                    expiration=contract.lastTradeDateOrContractMonth,
+                    quantity=int(execution.shares),
+                    price=float(execution.avgPrice),
+                    fill_time=execution.time,
+                    exec_id=exec_id,
+                )
+
+        except Exception as e:
+            logger.error(f"Error processing today's executions: {e}")
+
+    def _process_closing_trade(
+        self,
+        symbol: str,
+        strike: float,
+        expiration: str,
+        quantity: int,
+        price: float,
+        fill_time: datetime,
+        exec_id: str,
+    ):
+        """Process a closing trade (BUY fill) and update database."""
+        try:
+            db = Database(DatabaseSettings())
+            db.connect()
+
+            try:
+                # Find the matching open position
+                from datetime import date as date_type
+                exp_date = date_type(
+                    int(expiration[:4]),
+                    int(expiration[4:6]),
+                    int(expiration[6:8])
+                )
+
+                position = db.get_position_by_contract(
+                    symbol=symbol,
+                    strike=Decimal(str(strike)),
+                    expiration=exp_date,
+                )
+
+                if not position:
+                    logger.debug(
+                        f"No open position found for {symbol} {strike}P {expiration} "
+                        f"(may already be closed)"
+                    )
+                    return
+
+                # Record the closing trade
+                trade = Trade(
+                    trade_date=fill_time.date(),
+                    symbol=symbol,
+                    strike=Decimal(str(strike)),
+                    expiration=exp_date,
+                    quantity=quantity,
+                    action="BUY",
+                    price=Decimal(str(price)),
+                    fill_time=fill_time,
+                    strategy_id=position.strategy_id,
+                )
+                trade_id = db.insert_trade(trade)
+
+                # Close the position
+                db.close_position(
+                    position_id=position.id,
+                    exit_price=Decimal(str(price)),
+                    exit_time=fill_time,
+                )
+
+                logger.info(
+                    f"Recorded closing trade: {symbol} {strike}P @ ${price} "
+                    f"(trade_id={trade_id}, position_id={position.id})"
+                )
+
+            finally:
+                db.disconnect()
+
+        except Exception as e:
+            logger.error(f"Error recording closing trade: {e}")
 
     def _get_position_key(self, symbol: str, strike: float, expiration: str) -> str:
         """Generate a unique key for a position."""
