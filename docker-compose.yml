@@ -9,6 +9,34 @@
 
 services:
   # ===========================================================================
+  # Traefik Reverse Proxy (HTTPS with Let's Encrypt)
+  # ===========================================================================
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@jiamin.io}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-letsencrypt:/letsencrypt
+    restart: unless-stopped
+    networks:
+      - ibkr-network
+
+  # ===========================================================================
   # PostgreSQL Database
   # ===========================================================================
   postgres:
@@ -96,8 +124,12 @@ services:
       RUN_MODE: ${RUN_MODE:-all}
       DRY_RUN: ${DRY_RUN:-true}
       TZ: ${TZ:-America/New_York}
-    ports:
-      - "${DASHBOARD_PORT:-8000}:8000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.rule=Host(`${DASHBOARD_DOMAIN:-ibkr.jiamin.io}`)"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -113,3 +145,4 @@ networks:
 volumes:
   postgres_data:
   ib-gateway-data:
+  traefik-letsencrypt:

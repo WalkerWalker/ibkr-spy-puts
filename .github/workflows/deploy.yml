@@ -73,7 +73,8 @@ jobs:
             sudo docker-compose stop trading-bot || true
             sudo docker-compose rm -f trading-bot || true
 
-            # Start with new image (uses image: directive from docker-compose)
+            # Start traefik (if not running) and trading-bot with new image
+            sudo docker-compose up -d traefik
             sudo TRADING_BOT_IMAGE=ghcr.io/walkerwalker/ibkr-spy-puts:latest docker-compose up -d trading-bot
 
             # Show status
