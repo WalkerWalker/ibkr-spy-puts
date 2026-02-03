@@ -139,6 +139,8 @@ async def get_positions_live():
         "spy_price": manager.get_spy_price(),
         "data_source": "live",
         "market_open": calendar.is_market_open(),
+        "positions_count": len(manager.get_positions()),
+        "cache_updated_at": manager._cache.last_update.isoformat() if manager._cache.last_update else None,
     }
 
 

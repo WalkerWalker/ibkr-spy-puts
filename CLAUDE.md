@@ -144,3 +144,14 @@ curl -s http://localhost:8000/api/live-orders | python3 -m json.tool
 ```
 
 See `tests/integration/test_conflict_handling.py` for automated tests.
+
+## Debugging Workflow
+
+**IMPORTANT: When a problem is reported, follow this process:**
+
+1. **DO NOT fix or restart anything** - The problem state is valuable for diagnosis
+2. **Investigate and find the root cause first**
+3. **Explain the root cause clearly to the user**
+4. **Wait for user confirmation before implementing any fix**
+
+Restarting services destroys evidence. Keep the broken state until you understand why it's broken.
