@@ -220,6 +220,15 @@ class IBConnectionManager:
                 account = accounts[0]
                 trading_mode = "PAPER" if account.startswith("DU") else "LIVE"
                 self._gateway_connected = True
+
+                # Set status early so dashboard sees login immediately
+                self._update_status(
+                    connected=True,
+                    logged_in=True,
+                    account=account,
+                    trading_mode=trading_mode,
+                    ready_to_trade=True,
+                )
                 logger.info(f"Connected to {trading_mode} account {account}")
 
                 # Register error handler to detect disconnections (Error 1100)
@@ -236,19 +245,10 @@ class IBConnectionManager:
                 # Register execution callback for TP/SL fills
                 self._register_execution_callback()
 
-                # Update cache BEFORE setting status to logged_in
-                # This ensures live data is ready when dashboard sees login
-                logger.info("Updating cache before reporting logged in")
+                # Update cache after connection setup
+                # Dashboard will refresh positions every 15 seconds
+                logger.info("Updating cache after connection")
                 self._update_cache()
-
-                # NOW set status to logged_in (cache is ready)
-                self._update_status(
-                    connected=True,
-                    logged_in=True,
-                    account=account,
-                    trading_mode=trading_mode,
-                    ready_to_trade=True,
-                )
             else:
                 self._update_status(connected=True, logged_in=False)
 
