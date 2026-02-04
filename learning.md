@@ -50,3 +50,22 @@ When debugging "connection accepted but immediately closed" issues with IB Gatew
 1. Is the client connecting through socat proxy or directly?
 2. Is the connecting IP in `TrustedIPs`?
 3. Is `AcceptIncomingConnectionAction` set? (only helps for popup dialogs, not the TrustedIPs restriction)
+
+### Local Development Setup
+
+For local development with paper trading, create a `docker-compose.override.yml` (gitignored):
+
+```yaml
+services:
+  ib-gateway:
+    ports:
+      - "4003:4003"
+      - "4004:4004"
+```
+
+Or simply set in `.env` (already gitignored):
+```
+TWS_DOCKER_PORT=4004
+```
+
+**Do NOT add port 4003/4004 to the main docker-compose.yml** - it will trigger gateway restart on EC2 deploy, requiring 2FA.

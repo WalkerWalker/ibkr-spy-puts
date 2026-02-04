@@ -81,9 +81,7 @@ services:
       TWS_ACCEPT_INCOMING: "accept"       # Auto-accept API connections
     ports:
       - "4001:4001"  # Live API
-      - "4002:4002"  # Paper API (direct - not recommended)
-      - "4003:4003"  # Live API via socat proxy
-      - "4004:4004"  # Paper API via socat proxy
+      - "4002:4002"  # Paper API
       - "5900:5900"  # VNC (optional debugging)
     volumes:
       - ib-gateway-data:/home/ibgateway/Jts

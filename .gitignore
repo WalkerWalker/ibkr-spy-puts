@@ -65,3 +65,4 @@ credentials.json
 
 # ruff
 .ruff_cache/
+docker-compose.override.yml
