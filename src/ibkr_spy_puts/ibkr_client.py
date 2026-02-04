@@ -525,6 +525,10 @@ class IBKRClient:
 
         # Track cancelled orders for restoration on any failure
         conflicting_orders = []
+        # Track if SELL filled - after this point, we cannot retry
+        sell_filled = False
+        sell_trade_ref = None
+        fill_price_ref = None
 
         try:
             # =================================================================
@@ -659,6 +663,12 @@ class IBKRClient:
                 )
 
             # =================================================================
+            # POINT OF NO RETURN: SELL order filled - cannot retry after this
+            # =================================================================
+            sell_filled = True
+            sell_trade_ref = sell_trade
+
+            # =================================================================
             # STEP 2: Log post-fill contract details and extract commission
             # =================================================================
             logger.info("Step 2: Fetching post-fill contract details...")
@@ -700,6 +710,7 @@ class IBKRClient:
             if sell_trade.orderStatus.avgFillPrice > 0:
                 actual_entry_price = sell_trade.orderStatus.avgFillPrice
                 logger.info(f"Sell order filled at {actual_entry_price} (limit was {limit_price})")
+            fill_price_ref = actual_entry_price  # Store for exception handler
 
             # Calculate TP/SL prices based on fill price
             actual_tp_price = round(actual_entry_price * 0.4, 2)  # 60% profit
@@ -750,13 +761,18 @@ class IBKRClient:
             )
 
             if not orders_success:
+                # SELL already filled - position exists! Cannot retry.
+                # Return success=True but with error_message to indicate TP/SL issue.
                 logger.error(f"TP/SL order placement failed! TP status: {take_profit_trade.orderStatus.status}, SL status: {stop_loss_trade.orderStatus.status}")
+                logger.error("SELL filled but TP/SL failed - position exists without exit orders! Manual intervention needed.")
                 return TradeResult(
-                    success=False,
-                    error_message=f"TP/SL orders failed - TP: {take_profit_trade.orderStatus.status}, SL: {stop_loss_trade.orderStatus.status}",
+                    success=True,  # SELL filled, position exists - cannot retry
+                    error_message=f"WARNING: TP/SL orders failed - manual intervention needed. TP: {take_profit_trade.orderStatus.status}, SL: {stop_loss_trade.orderStatus.status}",
                     sell_order_id=sell_trade.order.orderId,
                     sell_trade=sell_trade,
-                    cancelled_orders=conflicting_orders,  # Restore cancelled orders
+                    fill_price=actual_entry_price,
+                    commission=commission,
+                    cancelled_orders=conflicting_orders,
                 )
 
             return TradeResult(
@@ -773,11 +789,25 @@ class IBKRClient:
             )
 
         except Exception as e:
-            return TradeResult(
-                success=False,
-                error_message=str(e),
-                cancelled_orders=conflicting_orders,  # Restore any cancelled orders
-            )
+            if sell_filled:
+                # SELL already filled - position exists! Cannot retry.
+                logger.error(f"Exception after SELL filled: {e}")
+                logger.error("SELL filled but exception occurred - position exists! Manual intervention needed.")
+                return TradeResult(
+                    success=True,  # SELL filled, position exists - cannot retry
+                    error_message=f"WARNING: Exception after SELL filled - manual intervention needed: {e}",
+                    sell_order_id=sell_trade_ref.order.orderId if sell_trade_ref else None,
+                    sell_trade=sell_trade_ref,
+                    fill_price=fill_price_ref,
+                    cancelled_orders=conflicting_orders,
+                )
+            else:
+                # SELL not filled yet - can retry
+                return TradeResult(
+                    success=False,
+                    error_message=str(e),
+                    cancelled_orders=conflicting_orders,  # Restore any cancelled orders
+                )
 
     def restore_cancelled_orders(self, cancelled_orders: list) -> bool:
         """Re-place orders that were cancelled for conflict resolution.
