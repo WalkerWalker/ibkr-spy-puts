@@ -78,13 +78,15 @@ services:
       TWOFA_TIMEOUT_ACTION: "restart"  # Auto-retry if 2FA times out
       RELOGIN_AFTER_TWOFA_TIMEOUT: "yes"  # Retry login after 2FA timeout (every 3 min)
       TWS_COLD_RESTART: "04:00 AM"        # Sunday cold restart at 4 AM ET (10 AM Zurich) - requires 2FA
+      TWS_ACCEPT_INCOMING: "accept"       # Auto-accept API connections
     ports:
       - "4001:4001"  # Live API
-      - "4002:4002"  # Paper API
+      - "4002:4002"  # Paper API (direct - not recommended)
+      - "4003:4003"  # Live API via socat proxy
+      - "4004:4004"  # Paper API via socat proxy
       - "5900:5900"  # VNC (optional debugging)
     volumes:
       - ib-gateway-data:/home/ibgateway/Jts
-      - ./docker/ibc/config.ini:/home/ibgateway/ibc/config.ini
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:5000 || exit 0"]
       interval: 30s
@@ -130,6 +132,8 @@ services:
       - "traefik.http.routers.dashboard.entrypoints=websecure"
       - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
       - "traefik.http.services.dashboard.loadbalancer.server.port=8000"
+    ports:
+      - "${DASHBOARD_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
