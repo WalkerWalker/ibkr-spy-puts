@@ -128,6 +128,10 @@ class IBConnectionManager:
         # Track processed executions to avoid duplicates
         self._processed_exec_ids: set[str] = set()
 
+        # Track connection state from error events
+        # (ib.isConnected() doesn't detect Error 1100)
+        self._gateway_connected: bool = False
+
     def start(self):
         """Start the connection manager in a background thread."""
         if self._thread is not None and self._thread.is_alive():
@@ -157,19 +161,24 @@ class IBConnectionManager:
         while not self._stop_event.is_set():
             try:
                 self._ensure_connected()
-                if self.ib.isConnected():
+                # Check both socket connection AND gateway connectivity to IBKR
+                # ib.isConnected() = socket open, _gateway_connected = no Error 1100
+                if self.ib.isConnected() and self._gateway_connected:
                     self._update_cache()
                     # Process events for streaming data
                     self.ib.sleep(5)
                 else:
-                    # Update status and clear stale data when not connected
-                    self._update_status(connected=False, error="Connection lost")
+                    # Not connected: either socket closed or Error 1100 received
+                    if not self.ib.isConnected():
+                        self._update_status(connected=False, error="Socket disconnected")
+                    # If _gateway_connected is False, status already updated by error handler
                     self._cache.ibkr_positions = []
                     self._cache.orders = []
                     self._stop_event.wait(5)
             except Exception as e:
                 logger.error(f"Connection manager error: {e}")
                 self._update_status(connected=False, error=str(e))
+                self._gateway_connected = False
                 self._cache.ibkr_positions = []  # Clear stale data on error
                 self._stop_event.wait(5)
 
@@ -179,8 +188,19 @@ class IBConnectionManager:
 
     def _ensure_connected(self):
         """Ensure we're connected to the gateway."""
-        if self.ib.isConnected():
+        if self.ib.isConnected() and self._gateway_connected:
             return
+
+        # If socket is open but gateway disconnected (Error 1100), disconnect first
+        if self.ib.isConnected() and not self._gateway_connected:
+            logger.info("Socket open but gateway disconnected from IBKR, reconnecting...")
+            try:
+                self.ib.disconnect()
+            except Exception:
+                pass
+
+        # Reset gateway state before connection attempt
+        self._gateway_connected = False
 
         try:
             logger.info(f"Connecting to {self.settings.host}:{self.settings.port}")
@@ -197,6 +217,7 @@ class IBConnectionManager:
             if accounts:
                 account = accounts[0]
                 trading_mode = "PAPER" if account.startswith("DU") else "LIVE"
+                self._gateway_connected = True
                 self._update_status(
                     connected=True,
                     logged_in=True,
@@ -205,6 +226,10 @@ class IBConnectionManager:
                     ready_to_trade=True,
                 )
                 logger.info(f"Connected to {trading_mode} account {account}")
+
+                # Register error handler to detect disconnections (Error 1100)
+                # ib.isConnected() only checks socket, not IBKR server connectivity
+                self._register_error_handler()
 
                 # Request positions for position verification
                 self.ib.reqPositions()
@@ -220,6 +245,7 @@ class IBConnectionManager:
 
         except Exception as e:
             logger.error(f"Failed to connect: {e}")
+            self._gateway_connected = False
             self._update_status(connected=False, error=str(e))
 
     def _subscribe_spy_data(self):
@@ -235,6 +261,43 @@ class IBConnectionManager:
 
         except Exception as e:
             logger.error(f"Failed to subscribe to SPY data: {e}")
+
+    def _register_error_handler(self):
+        """Register error handler to detect connectivity loss.
+
+        ib.isConnected() only checks if socket to gateway is open.
+        We need to listen for Error 1100 (gateway disconnected from IBKR)
+        to properly detect when the connection is lost.
+        """
+        self.ib.errorEvent += self._on_error
+        logger.info("Error handler registered for connectivity detection")
+
+    def _on_error(self, reqId: int, errorCode: int, errorString: str, contract):
+        """Handle IB error events.
+
+        Key errors:
+        - 1100: Connectivity lost between IB and TWS
+        - 1101: Connectivity restored (data lost)
+        - 1102: Connectivity restored (data maintained)
+        - 2110: Connectivity restored (alternative code)
+        """
+        # Log all errors for debugging
+        logger.debug(f"IB Error {errorCode}: {errorString}")
+
+        if errorCode == 1100:
+            # Connectivity between IB and TWS lost
+            logger.warning(f"Gateway disconnected from IBKR: {errorString}")
+            self._gateway_connected = False
+            self._update_status(connected=False, error=f"Error {errorCode}: {errorString}")
+            # Clear stale data
+            self._cache.ibkr_positions = []
+            self._cache.orders = []
+
+        elif errorCode in (1101, 1102, 2110):
+            # Connectivity restored
+            logger.info(f"Gateway reconnected to IBKR: {errorString}")
+            self._gateway_connected = True
+            # Status will be updated in _ensure_connected on next loop
 
     def _register_execution_callback(self):
         """Register callback to handle order fills (for detecting TP/SL executions)."""
@@ -663,8 +726,10 @@ class IBConnectionManager:
 
         except Exception as e:
             logger.error(f"Failed to update cache: {e}")
-            if not self.ib.isConnected():
-                self._update_status(connected=False, error=str(e))
+            # Don't rely on ib.isConnected() - it returns True even after Error 1100
+            # If cache update fails, assume connection is bad
+            self._gateway_connected = False
+            self._update_status(connected=False, error=f"Cache update failed: {e}")
 
     def _update_status(
         self,
