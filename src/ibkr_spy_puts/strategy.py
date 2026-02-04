@@ -365,8 +365,7 @@ class PutSellingStrategy:
                 timestamp=datetime.now(),
             )
 
-        # Track cancelled orders across retries
-        all_cancelled_orders: list = []
+        # Each attempt is atomic: cancel orders -> execute -> restore on success or failure
         last_order = None
         last_result = None
 
@@ -384,29 +383,21 @@ class PutSellingStrategy:
             last_order = order
             logger.info(f"Attempt {attempt}: Selected {order.option.symbol} {order.option.strike}P @ ${order.limit_price:.2f}")
 
-            # Execute the trade
+            # Execute the trade (this cancels conflicting orders, places SELL, places TP/SL)
             result = self.execute_trade(order, dry_run=dry_run)
             last_result = result
 
             if result.success:
-                # Success! Restore any cancelled orders from this trade AND previous attempts
-                orders_to_restore = all_cancelled_orders.copy()
+                # Success! Restore any cancelled orders from conflicting positions
                 if result.cancelled_orders:
-                    orders_to_restore.extend(result.cancelled_orders)
-                if orders_to_restore:
-                    logger.info(f"Trade filled! Restoring {len(orders_to_restore)} cancelled order(s)...")
-                    self.client.restore_cancelled_orders(orders_to_restore)
+                    logger.info(f"Trade filled! Restoring {len(result.cancelled_orders)} cancelled order(s)...")
+                    self.client.restore_cancelled_orders(result.cancelled_orders)
                 return order, result
 
-            # Failed - check if we have cancelled orders to track
+            # Failed - immediately restore cancelled orders to make attempt atomic
             if result.cancelled_orders:
-                # Merge with existing cancelled orders (avoid duplicates by order ID)
-                existing_ids = {o.get("order", {}).orderId for o in all_cancelled_orders if o.get("order")}
-                for co in result.cancelled_orders:
-                    order_obj = co.get("order")
-                    if order_obj and order_obj.orderId not in existing_ids:
-                        all_cancelled_orders.append(co)
-                        existing_ids.add(order_obj.orderId)
+                logger.info(f"Attempt {attempt} failed. Restoring {len(result.cancelled_orders)} cancelled order(s)...")
+                self.client.restore_cancelled_orders(result.cancelled_orders)
 
             logger.warning(f"Attempt {attempt} failed: {result.message}")
 
@@ -415,14 +406,9 @@ class PutSellingStrategy:
             else:
                 logger.error(f"All {max_retries} attempts failed")
 
-        # All retries exhausted
+        # All retries exhausted - no cancelled orders to restore (already restored after each attempt)
         if last_order is None:
             logger.error(f"All {max_retries} attempts failed: No suitable option found")
-
-        # Restore cancelled orders
-        if all_cancelled_orders:
-            logger.info("All retries failed. Restoring cancelled orders...")
-            self.client.restore_cancelled_orders(all_cancelled_orders)
 
         return last_order, TradeResult(
             success=False,
