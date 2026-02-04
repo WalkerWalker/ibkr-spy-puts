@@ -523,6 +523,9 @@ class IBKRClient:
         import time
         logger = logging.getLogger(__name__)
 
+        # Track cancelled orders for restoration on any failure
+        conflicting_orders = []
+
         try:
             # =================================================================
             # STEP 1: Place sell order (with conflict handling)
@@ -535,7 +538,6 @@ class IBKRClient:
             self.ib.sleep(2)
 
             # Find conflicting orders on the SAME contract (opposite side)
-            conflicting_orders = []
             open_trades = self.ib.openTrades()
             logger.info(f"Checking for conflicting orders. Open trades: {len(open_trades)}, target conId: {contract.conId}")
 
@@ -586,6 +588,7 @@ class IBKRClient:
                     return TradeResult(
                         success=False,
                         error_message=f"Cannot cancel conflicting orders: {remaining_conflicts}",
+                        cancelled_orders=conflicting_orders,  # Restore what we cancelled
                     )
                 logger.info("All conflicting orders successfully cancelled")
 
@@ -753,6 +756,7 @@ class IBKRClient:
                     error_message=f"TP/SL orders failed - TP: {take_profit_trade.orderStatus.status}, SL: {stop_loss_trade.orderStatus.status}",
                     sell_order_id=sell_trade.order.orderId,
                     sell_trade=sell_trade,
+                    cancelled_orders=conflicting_orders,  # Restore cancelled orders
                 )
 
             return TradeResult(
@@ -772,6 +776,7 @@ class IBKRClient:
             return TradeResult(
                 success=False,
                 error_message=str(e),
+                cancelled_orders=conflicting_orders,  # Restore any cancelled orders
             )
 
     def restore_cancelled_orders(self, cancelled_orders: list) -> bool:
