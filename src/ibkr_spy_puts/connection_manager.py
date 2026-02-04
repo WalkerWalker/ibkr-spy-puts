@@ -162,8 +162,10 @@ class IBConnectionManager:
                     # Process events for streaming data
                     self.ib.sleep(5)
                 else:
-                    # Clear IBKR positions when not connected
+                    # Update status and clear stale data when not connected
+                    self._update_status(connected=False, error="Connection lost")
                     self._cache.ibkr_positions = []
+                    self._cache.orders = []
                     self._stop_event.wait(5)
             except Exception as e:
                 logger.error(f"Connection manager error: {e}")
