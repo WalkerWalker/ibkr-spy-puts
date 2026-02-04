@@ -935,9 +935,9 @@
             }
         }
 
-        // Fetch live positions on page load and every 2 minutes
+        // Fetch live positions on page load and every 15 seconds
         setTimeout(fetchLivePositions, 2000);
-        setInterval(fetchLivePositions, 120000);
+        setInterval(fetchLivePositions, 15000);
 
         // Fetch SPY price
         async function fetchSpyPrice() {

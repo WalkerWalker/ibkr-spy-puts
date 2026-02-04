@@ -242,6 +242,10 @@ class IBConnectionManager:
 
                 # Register execution callback for TP/SL fills
                 self._register_execution_callback()
+
+                # Immediate cache update after connection (don't wait for loop)
+                logger.info("Triggering immediate cache update after connection")
+                self._update_cache()
             else:
                 self._update_status(connected=True, logged_in=False)
 
