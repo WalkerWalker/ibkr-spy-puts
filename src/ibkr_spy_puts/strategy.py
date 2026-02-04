@@ -389,10 +389,13 @@ class PutSellingStrategy:
             last_result = result
 
             if result.success:
-                # Success! Restore any cancelled orders from previous positions
-                if all_cancelled_orders:
-                    logger.info("Trade filled! Restoring cancelled orders from existing positions...")
-                    self.client.restore_cancelled_orders(all_cancelled_orders)
+                # Success! Restore any cancelled orders from this trade AND previous attempts
+                orders_to_restore = all_cancelled_orders.copy()
+                if result.cancelled_orders:
+                    orders_to_restore.extend(result.cancelled_orders)
+                if orders_to_restore:
+                    logger.info(f"Trade filled! Restoring {len(orders_to_restore)} cancelled order(s)...")
+                    self.client.restore_cancelled_orders(orders_to_restore)
                 return order, result
 
             # Failed - check if we have cancelled orders to track
