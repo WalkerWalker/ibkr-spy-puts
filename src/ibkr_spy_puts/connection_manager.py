@@ -171,6 +171,7 @@ class IBConnectionManager:
                     # Not connected: either socket closed or Error 1100 received
                     if not self.ib.isConnected():
                         self._update_status(connected=False, error="Socket disconnected")
+                        self._clear_live_position_data()
                     # If _gateway_connected is False, status already updated by error handler
                     self._cache.ibkr_positions = []
                     self._cache.orders = []
@@ -180,6 +181,7 @@ class IBConnectionManager:
                 self._update_status(connected=False, error=str(e))
                 self._gateway_connected = False
                 self._cache.ibkr_positions = []  # Clear stale data on error
+                self._clear_live_position_data()
                 self._stop_event.wait(5)
 
         # Cleanup
@@ -292,12 +294,37 @@ class IBConnectionManager:
             # Clear stale data
             self._cache.ibkr_positions = []
             self._cache.orders = []
+            # Mark positions as stale (clear live data, keep DB data)
+            self._clear_live_position_data()
 
         elif errorCode in (1101, 1102, 2110):
             # Connectivity restored
             logger.info(f"Gateway reconnected to IBKR: {errorString}")
             self._gateway_connected = True
             # Status will be updated in _ensure_connected on next loop
+
+    def _clear_live_position_data(self):
+        """Clear live market data from positions, keeping DB data.
+
+        Called when disconnected to mark positions as stale.
+        """
+        with self._lock:
+            for pos in self._cache.positions:
+                # Clear live data fields
+                pos.current_price = None
+                pos.price_source = None
+                pos.bid = None
+                pos.ask = None
+                pos.delta = None
+                pos.theta = None
+                pos.gamma = None
+                pos.vega = None
+                pos.iv = None
+                pos.unrealized_pnl = None
+                pos.unrealized_pnl_pct = None
+            # Also clear option tickers so they're re-subscribed on reconnect
+            self._option_tickers.clear()
+            self._option_contracts.clear()
 
     def _register_execution_callback(self):
         """Register callback to handle order fills (for detecting TP/SL executions)."""
