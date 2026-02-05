@@ -329,17 +329,18 @@ def create_trade_function(
     """
     def trade():
         import asyncio
-        from decimal import Decimal
-        from ibkr_spy_puts.config import ExitOrderSettings, DatabaseSettings, TWSSettings
-        from ibkr_spy_puts.database import Database, Position, Trade
-        from ibkr_spy_puts.strategy import PutSellingStrategy
 
-        # ib_insync requires an event loop - create one for this thread
+        # ib_insync requires an event loop - create one for this thread BEFORE imports
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+
+        from decimal import Decimal
+        from ibkr_spy_puts.config import ExitOrderSettings, DatabaseSettings, TWSSettings
+        from ibkr_spy_puts.database import Database, Position, Trade
+        from ibkr_spy_puts.strategy import PutSellingStrategy
 
         # Create client
         if use_mock:
