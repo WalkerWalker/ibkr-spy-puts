@@ -69,6 +69,9 @@ jobs:
             # Pull the pre-built image from GHCR (public, no auth needed)
             sudo docker pull ghcr.io/walkerwalker/ibkr-spy-puts:latest
 
+            # Save old container logs before removing (auto-cleaned by systemd-tmpfiles)
+            sudo docker logs ibkr-bot > /tmp/ibkr-bot-$(date +%Y%m%d-%H%M%S).log 2>&1 || true
+
             # Stop and remove old trading-bot container
             sudo docker-compose stop trading-bot || true
             sudo docker-compose rm -f trading-bot || true
