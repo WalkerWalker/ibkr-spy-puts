@@ -777,11 +777,11 @@
             }
         }
 
-        // Check connection status every 10 seconds
-        setInterval(checkConnectionStatus, 10000);
+        // Check connection status every 60 seconds
+        setInterval(checkConnectionStatus, 60000);
 
         // Initial check after page load
-        setTimeout(checkConnectionStatus, 2000);
+        setTimeout(checkConnectionStatus, 5000);
 
         // Toggle position orders visibility
         function togglePositionOrders(posId) {
