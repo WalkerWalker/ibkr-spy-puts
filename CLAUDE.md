@@ -155,3 +155,19 @@ See `tests/integration/test_conflict_handling.py` for automated tests.
 4. **Wait for user confirmation before implementing any fix**
 
 Restarting services destroys evidence. Keep the broken state until you understand why it's broken.
+
+**DO NOT push code changes** until root cause is confirmed — pushing to `main` triggers a deploy that restarts `ibkr-bot` and destroys its in-container logs.
+
+### Logs
+
+```bash
+# SSH into EC2 (key is in project root, git-ignored)
+ssh -i .ibkr-key.pem ec2-user@98.88.118.228
+
+# Live container logs
+sudo docker logs ibkr-bot 2>&1
+sudo docker logs ibkr-gateway 2>&1
+
+# Old ibkr-bot logs (saved before each deploy, auto-cleaned by systemd-tmpfiles)
+ls -lt /tmp/ibkr-bot-*.log
+```
