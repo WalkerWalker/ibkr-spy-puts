@@ -308,7 +308,15 @@ class IBConnectionManager:
             # Connectivity restored
             logger.info(f"Gateway reconnected to IBKR: {errorString}")
             self._gateway_connected = True
-            # Status will be updated in _ensure_connected on next loop
+            # Restore status immediately using cached account info
+            status = self._cache.status
+            self._update_status(
+                connected=True,
+                logged_in=True,
+                account=status.account,
+                trading_mode=status.trading_mode,
+                ready_to_trade=True,
+            )
 
     def _clear_live_position_data(self):
         """Clear live market data from positions, keeping DB data.
