@@ -132,6 +132,10 @@ class IBConnectionManager:
         # (ib.isConnected() doesn't detect Error 1100)
         self._gateway_connected: bool = False
 
+        # Store account info separately so it survives Error 1100 cache clearing
+        self._account: str | None = None
+        self._trading_mode: str | None = None
+
     def start(self):
         """Start the connection manager in a background thread."""
         if self._thread is not None and self._thread.is_alive():
@@ -169,7 +173,9 @@ class IBConnectionManager:
                     self.ib.sleep(5)
                 else:
                     # Not connected: either socket closed or Error 1100 received
-                    if not self.ib.isConnected():
+                    socket_connected = self.ib.isConnected()
+                    logger.info(f"Loop waiting: socket={socket_connected}, gateway={self._gateway_connected}")
+                    if not socket_connected:
                         self._update_status(connected=False, error="Socket disconnected")
                         self._clear_live_position_data()
                     # If _gateway_connected is False, status already updated by error handler
@@ -220,6 +226,10 @@ class IBConnectionManager:
                 account = accounts[0]
                 trading_mode = "PAPER" if account.startswith("DU") else "LIVE"
                 self._gateway_connected = True
+
+                # Store account info persistently (survives Error 1100 cache clearing)
+                self._account = account
+                self._trading_mode = trading_mode
 
                 # Set status early so dashboard sees login immediately
                 self._update_status(
@@ -278,6 +288,9 @@ class IBConnectionManager:
         We need to listen for Error 1100 (gateway disconnected from IBKR)
         to properly detect when the connection is lost.
         """
+        # Remove any existing handler first to avoid duplicate registrations
+        # (each reconnection calls this method again)
+        self.ib.errorEvent -= self._on_error
         self.ib.errorEvent += self._on_error
         logger.info("Error handler registered for connectivity detection")
 
@@ -308,13 +321,12 @@ class IBConnectionManager:
             # Connectivity restored
             logger.info(f"Gateway reconnected to IBKR: {errorString}")
             self._gateway_connected = True
-            # Restore status immediately using cached account info
-            status = self._cache.status
+            # Restore status using persistent account info (not cache, which was cleared by 1100)
             self._update_status(
                 connected=True,
                 logged_in=True,
-                account=status.account,
-                trading_mode=status.trading_mode,
+                account=self._account,
+                trading_mode=self._trading_mode,
                 ready_to_trade=True,
             )
 
