@@ -360,10 +360,19 @@ def create_trade_function(
             return
         logger.info("Connected to database")
 
-        # Connect to TWS
-        logger.info("Connecting to TWS...")
-        if not client.connect():
-            logger.error("Failed to connect to TWS")
+        # Connect to TWS with retries
+        import time as _time
+        connected = False
+        for attempt in range(3):
+            logger.info(f"Connecting to TWS (attempt {attempt + 1}/3)...")
+            if client.connect():
+                connected = True
+                break
+            logger.warning(f"Connection attempt {attempt + 1} failed, waiting 30s...")
+            _time.sleep(30)
+
+        if not connected:
+            logger.error("Failed to connect to TWS after 3 attempts")
             db.disconnect()
             return
 

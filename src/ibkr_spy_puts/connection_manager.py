@@ -110,6 +110,7 @@ class IBConnectionManager:
     def __init__(self, settings: TWSSettings | None = None):
         self.settings = settings or TWSSettings()
         self.ib = IB()
+        self.ib.RequestTimeout = 10  # Timeout for ib_insync requests (whatIfOrder, etc.)
         self._cache = CachedData()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -220,7 +221,7 @@ class IBConnectionManager:
 
                 # Request positions for position verification
                 self.ib.reqPositions()
-                self.ib.sleep(2)  # Wait for position updates
+                self._stop_event.wait(2)  # Wait for position updates
 
                 # Subscribe to SPY market data
                 self._subscribe_spy_data()
@@ -509,7 +510,7 @@ class IBConnectionManager:
     def _update_orders(self):
         """Update cached orders."""
         self.ib.reqAllOpenOrders()
-        self.ib.sleep(0.5)
+        self._stop_event.wait(0.5)
 
         orders = []
         for trade in self.ib.openTrades():
@@ -562,7 +563,7 @@ class IBConnectionManager:
         try:
             # Request fresh position update
             self.ib.reqPositions()
-            self.ib.sleep(1)
+            self._stop_event.wait(1)
             all_positions = self.ib.positions()
 
             # Process all positions
@@ -604,7 +605,7 @@ class IBConnectionManager:
         self._get_ibkr_positions()
 
         # Wait for data to arrive
-        self.ib.sleep(2)
+        self._stop_event.wait(2)
 
         enriched = []
         today = datetime.now().date()
