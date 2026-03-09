@@ -242,6 +242,7 @@ class TradingScheduler:
             id="daily_trade",
             name="Daily Put Selling",
             replace_existing=True,
+            misfire_grace_time=3700,  # 1h+: survive DST transitions
         )
 
         # Schedule daily snapshot at market close (4:00 PM ET)
@@ -258,6 +259,7 @@ class TradingScheduler:
                 id="daily_snapshot",
                 name="Daily Book Snapshot",
                 replace_existing=True,
+                misfire_grace_time=3700,  # 1h+: survive DST transitions
             )
             logger.info(f"Snapshot scheduled: 16:05 {self.settings.timezone}")
 
