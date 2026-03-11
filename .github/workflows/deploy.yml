@@ -80,6 +80,9 @@ jobs:
             sudo docker-compose up -d traefik
             sudo TRADING_BOT_IMAGE=ghcr.io/walkerwalker/ibkr-spy-puts:latest docker-compose up -d trading-bot
 
+            # Clean up old images to prevent disk full
+            sudo docker image prune -f
+
             # Show status
             sudo docker-compose ps
             echo "Deployment complete!"
