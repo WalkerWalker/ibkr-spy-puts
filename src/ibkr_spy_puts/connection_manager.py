@@ -677,12 +677,16 @@ class IBConnectionManager:
             if portfolio_item:
                 position_data.current_price = portfolio_item.marketPrice
                 position_data.price_source = "portfolio"
-                position_data.unrealized_pnl = round(float(portfolio_item.unrealizedPNL), 2)
+
+                # Portfolio P&L is for ALL contracts combined — allocate per DB position
+                ibkr_qty = abs(int(portfolio_item.position)) or 1
+                pnl_per_contract = float(portfolio_item.unrealizedPNL) / ibkr_qty
+                position_data.unrealized_pnl = round(pnl_per_contract * position_data.quantity, 2)
 
                 premium_collected = position_data.entry_price * 100 * position_data.quantity
                 if premium_collected > 0:
                     position_data.unrealized_pnl_pct = round(
-                        (float(portfolio_item.unrealizedPNL) / premium_collected) * 100, 2
+                        (position_data.unrealized_pnl / premium_collected) * 100, 2
                     )
 
             # Enrich with live data from ticker (Greeks, bid/ask)
