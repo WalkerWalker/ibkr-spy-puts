@@ -672,22 +672,19 @@ class IBConnectionManager:
                 days_in_trade=(today - entry_date).days,
             )
 
-            # Use IBKR portfolio data for P&L (authoritative, matches IBKR TWS)
+            # Use IBKR portfolio's marketPrice but calculate P&L per position
+            # (each DB position has its own entry cost, even for same strike)
             portfolio_item = portfolio.get(key)
             if portfolio_item:
                 position_data.current_price = portfolio_item.marketPrice
                 position_data.price_source = "portfolio"
 
-                # Portfolio P&L is for ALL contracts combined — allocate per DB position
-                ibkr_qty = abs(int(portfolio_item.position)) or 1
-                pnl_per_contract = float(portfolio_item.unrealizedPNL) / ibkr_qty
-                position_data.unrealized_pnl = round(pnl_per_contract * position_data.quantity, 2)
+                pnl = (position_data.entry_price - portfolio_item.marketPrice) * 100 * position_data.quantity
+                position_data.unrealized_pnl = round(pnl, 2)
 
                 premium_collected = position_data.entry_price * 100 * position_data.quantity
                 if premium_collected > 0:
-                    position_data.unrealized_pnl_pct = round(
-                        (position_data.unrealized_pnl / premium_collected) * 100, 2
-                    )
+                    position_data.unrealized_pnl_pct = round((pnl / premium_collected) * 100, 2)
 
             # Enrich with live data from ticker (Greeks, bid/ask)
             ticker = self._option_tickers.get(key)
