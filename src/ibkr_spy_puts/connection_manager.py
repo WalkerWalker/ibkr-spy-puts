@@ -171,9 +171,14 @@ class IBConnectionManager:
                 if self.ib.isConnected():
                     self._update_cache()
 
-                # Wait between cycles using threading event (not ib.sleep)
-                # so the loop never gets stuck in ib_insync's event loop
-                self._stop_event.wait(5)
+                # Pump ib_insync event loop between cycles so ticker data stays fresh
+                for _ in range(5):
+                    if self._stop_event.is_set():
+                        break
+                    try:
+                        self.ib.sleep(1)
+                    except Exception:
+                        break
             except Exception as e:
                 logger.error(f"Connection manager error: {e}")
                 self._update_status(connected=False, error=str(e))
@@ -221,7 +226,7 @@ class IBConnectionManager:
 
                 # Request positions for position verification
                 self.ib.reqPositions()
-                self._stop_event.wait(2)  # Wait for position updates
+                self.ib.sleep(2)  # Wait for position updates
 
                 # Subscribe to SPY market data
                 self._subscribe_spy_data()
@@ -510,7 +515,7 @@ class IBConnectionManager:
     def _update_orders(self):
         """Update cached orders."""
         self.ib.reqAllOpenOrders()
-        self._stop_event.wait(0.5)
+        self.ib.sleep(0.5)
 
         orders = []
         for trade in self.ib.openTrades():
@@ -563,7 +568,7 @@ class IBConnectionManager:
         try:
             # Request fresh position update
             self.ib.reqPositions()
-            self._stop_event.wait(1)
+            self.ib.sleep(1)
             all_positions = self.ib.positions()
 
             # Process all positions
@@ -593,6 +598,20 @@ class IBConnectionManager:
         self._cache.ibkr_positions = ibkr_positions
         return ibkr_keys
 
+    def _build_portfolio_lookup(self) -> dict[str, Any]:
+        """Build a lookup from position key to IBKR PortfolioItem."""
+        lookup = {}
+        try:
+            for item in self.ib.portfolio():
+                c = item.contract
+                if c.secType == "OPT" and c.symbol == "SPY" and getattr(c, "right", "") == "P":
+                    exp = getattr(c, "lastTradeDateOrContractMonth", "")
+                    key = self._get_position_key(c.symbol, c.strike, exp)
+                    lookup[key] = item
+        except Exception as e:
+            logger.error(f"Failed to read portfolio: {e}")
+        return lookup
+
     def _update_positions(self):
         """Update enriched positions with live data."""
         # Reload positions from DB periodically
@@ -604,8 +623,11 @@ class IBConnectionManager:
         # Fetch IBKR positions (populates cache for template verification)
         self._get_ibkr_positions()
 
-        # Wait for data to arrive
-        self._stop_event.wait(2)
+        # Pump event loop so ticker data and portfolio updates arrive
+        self.ib.sleep(2)
+
+        # Build portfolio lookup for authoritative P&L data
+        portfolio = self._build_portfolio_lookup()
 
         enriched = []
         today = datetime.now().date()
@@ -644,21 +666,39 @@ class IBConnectionManager:
                 days_in_trade=(today - entry_date).days,
             )
 
-            # Enrich with live data from ticker
+            # Use IBKR portfolio data for P&L (authoritative, matches IBKR TWS)
+            portfolio_item = portfolio.get(key)
+            if portfolio_item:
+                position_data.current_price = portfolio_item.marketPrice
+                position_data.price_source = "portfolio"
+                position_data.unrealized_pnl = round(float(portfolio_item.unrealizedPNL), 2)
+
+                premium_collected = position_data.entry_price * 100 * position_data.quantity
+                if premium_collected > 0:
+                    position_data.unrealized_pnl_pct = round(
+                        (float(portfolio_item.unrealizedPNL) / premium_collected) * 100, 2
+                    )
+
+            # Enrich with live data from ticker (Greeks, bid/ask)
             ticker = self._option_tickers.get(key)
             if ticker:
-                # Price: prefer bid/ask mid, fallback to last, then close
-                if _is_valid(ticker.bid) and _is_valid(ticker.ask):
-                    position_data.current_price = (ticker.bid + ticker.ask) / 2
+                # Bid/ask from ticker (useful for spread display)
+                if _is_valid(ticker.bid):
                     position_data.bid = ticker.bid
+                if _is_valid(ticker.ask):
                     position_data.ask = ticker.ask
-                    position_data.price_source = "bid_ask"
-                elif _is_valid(ticker.last):
-                    position_data.current_price = ticker.last
-                    position_data.price_source = "last"
-                elif _is_valid(ticker.close):
-                    position_data.current_price = ticker.close
-                    position_data.price_source = "close"
+
+                # Fall back to ticker price if portfolio didn't provide one
+                if position_data.current_price is None:
+                    if _is_valid(ticker.bid) and _is_valid(ticker.ask):
+                        position_data.current_price = (ticker.bid + ticker.ask) / 2
+                        position_data.price_source = "bid_ask"
+                    elif _is_valid(ticker.last):
+                        position_data.current_price = ticker.last
+                        position_data.price_source = "last"
+                    elif _is_valid(ticker.close):
+                        position_data.current_price = ticker.close
+                        position_data.price_source = "close"
 
                 # Greeks from modelGreeks
                 if ticker.modelGreeks:
@@ -669,9 +709,8 @@ class IBConnectionManager:
                     position_data.vega = g.vega
                     position_data.iv = g.impliedVol
 
-                # Calculate P&L
-                if position_data.current_price and position_data.entry_price:
-                    # For short puts: profit when price goes down
+                # Fall back to ticker-based P&L if portfolio didn't provide it
+                if position_data.unrealized_pnl is None and position_data.current_price and position_data.entry_price:
                     pnl = (position_data.entry_price - position_data.current_price) * 100 * position_data.quantity
                     position_data.unrealized_pnl = round(pnl, 2)
 
