@@ -226,16 +226,13 @@ class IBConnectionManager:
 
                 # Request positions for position verification
                 self.ib.reqPositions()
-                self.ib.sleep(2)  # Wait for position updates
+                self._stop_event.wait(2)  # Don't pump event loop yet — queued warnings can trigger disconnect
 
                 # Subscribe to SPY market data
                 self._subscribe_spy_data()
 
                 # Register execution callback for TP/SL fills
                 self._register_execution_callback()
-
-                logger.info("Updating cache after connection")
-                self._update_cache()
             else:
                 self._update_status(connected=True, logged_in=False)
 
@@ -515,7 +512,10 @@ class IBConnectionManager:
     def _update_orders(self):
         """Update cached orders."""
         self.ib.reqAllOpenOrders()
-        self.ib.sleep(0.5)
+        try:
+            self.ib.sleep(0.5)
+        except Exception:
+            pass
 
         orders = []
         for trade in self.ib.openTrades():
@@ -568,7 +568,10 @@ class IBConnectionManager:
         try:
             # Request fresh position update
             self.ib.reqPositions()
-            self.ib.sleep(1)
+            try:
+                self.ib.sleep(1)
+            except Exception:
+                pass
             all_positions = self.ib.positions()
 
             # Process all positions
@@ -624,7 +627,10 @@ class IBConnectionManager:
         self._get_ibkr_positions()
 
         # Pump event loop so ticker data and portfolio updates arrive
-        self.ib.sleep(2)
+        try:
+            self.ib.sleep(2)
+        except Exception:
+            pass
 
         # Build portfolio lookup for authoritative P&L data
         portfolio = self._build_portfolio_lookup()
