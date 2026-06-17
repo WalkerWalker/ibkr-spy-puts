@@ -328,39 +328,43 @@ class Database:
             """)
             return [dict(row) for row in cur.fetchall()]
 
-    def get_closed_positions_for_display(self, limit: int = 50) -> list[dict[str, Any]]:
+    def get_closed_positions_for_display(self, limit: int | None = None) -> list[dict[str, Any]]:
         """Get closed positions with P&L for dashboard display.
 
         Args:
-            limit: Maximum number of positions to return.
+            limit: Maximum number of positions to return. None returns all.
 
         Returns:
             List of closed position dicts with P&L calculations.
         """
+        query = """
+            SELECT
+                id,
+                symbol,
+                strike,
+                expiration,
+                quantity,
+                entry_price,
+                entry_time,
+                exit_price,
+                exit_time,
+                (entry_price - exit_price) * quantity * 100 as realized_pnl,
+                CASE WHEN entry_price > 0
+                    THEN ((entry_price - exit_price) / entry_price * 100)
+                    ELSE 0
+                END as realized_pnl_pct,
+                (exit_time::date - entry_time::date) as days_held,
+                strategy_id
+            FROM positions
+            WHERE status = 'CLOSED'
+            ORDER BY exit_time DESC
+        """
+        params: tuple = ()
+        if limit is not None:
+            query += " LIMIT %s"
+            params = (limit,)
         with self.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    id,
-                    symbol,
-                    strike,
-                    expiration,
-                    quantity,
-                    entry_price,
-                    entry_time,
-                    exit_price,
-                    exit_time,
-                    (entry_price - exit_price) * quantity * 100 as realized_pnl,
-                    CASE WHEN entry_price > 0
-                        THEN ((entry_price - exit_price) / entry_price * 100)
-                        ELSE 0
-                    END as realized_pnl_pct,
-                    (exit_time::date - entry_time::date) as days_held,
-                    strategy_id
-                FROM positions
-                WHERE status = 'CLOSED'
-                ORDER BY exit_time DESC
-                LIMIT %s
-            """, (limit,))
+            cur.execute(query, params)
             return [dict(row) for row in cur.fetchall()]
 
     def get_position_by_contract(

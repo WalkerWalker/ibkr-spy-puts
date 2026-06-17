@@ -106,7 +106,7 @@ async def get_positions():
 
 
 @app.get("/api/positions/closed")
-async def get_closed_positions(limit: int = 50):
+async def get_closed_positions(limit: int | None = None):
     """Get closed positions with P&L."""
     db = get_db()
     try:
@@ -361,7 +361,7 @@ async def dashboard(request: Request):
     db = get_db()
     try:
         positions = db.get_positions_for_display()
-        closed_positions = db.get_closed_positions_for_display(limit=50)
+        closed_positions = db.get_closed_positions_for_display()
         summary = db.get_strategy_summary()
         trade_history = db.get_trade_history()
 
