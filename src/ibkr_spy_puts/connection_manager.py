@@ -11,8 +11,9 @@ import asyncio
 import logging
 import math
 import threading
+import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from decimal import Decimal
@@ -23,6 +24,24 @@ from ibkr_spy_puts.config import TWSSettings, DatabaseSettings
 from ibkr_spy_puts.database import Database, Trade
 
 logger = logging.getLogger(__name__)
+
+# How often to re-scan executions for TP/SL fills we may have missed
+EXEC_SYNC_INTERVAL_SECONDS = 60
+
+# How far back to scan: from the start of yesterday, so fills are still caught
+# when the next scan/reconnect happens after midnight
+EXEC_LOOKBACK_DAYS = 1
+
+
+def _is_before(a: datetime, b: datetime | None) -> bool:
+    """True if timestamp a is strictly before b (naive values treated as UTC)."""
+    if b is None:
+        return False
+    if a.tzinfo is None:
+        a = a.replace(tzinfo=timezone.utc)
+    if b.tzinfo is None:
+        b = b.replace(tzinfo=timezone.utc)
+    return a < b
 
 
 @dataclass
@@ -129,6 +148,9 @@ class IBConnectionManager:
         # Track processed executions to avoid duplicates
         self._processed_exec_ids: set[str] = set()
 
+        # Periodic execution sync (safety net for missed live fill events)
+        self._last_exec_sync: float = 0.0
+
         # Account info from last successful connection
         self._account: str | None = None
         self._trading_mode: str | None = None
@@ -170,6 +192,14 @@ class IBConnectionManager:
 
                 if self.ib.isConnected():
                     self._update_cache()
+
+                # Safety net: re-scan recent executions periodically.
+                # Live execDetails events only reach the clientId that placed the
+                # order (or the Master API client), and TP/SL orders are placed by
+                # the trader's clientId - so this poll is what reliably closes them.
+                if (self.ib.isConnected() and
+                        time.monotonic() - self._last_exec_sync >= EXEC_SYNC_INTERVAL_SECONDS):
+                    self._process_todays_executions()
 
                 # Pump ib_insync event loop between cycles so ticker data stays fresh
                 for _ in range(5):
@@ -289,79 +319,67 @@ class IBConnectionManager:
         logger.info("Execution callback registered")
 
     def _on_execution(self, trade, fill):
-        """Handle execution (fill) events.
+        """Handle live execution (fill) events.
 
-        This is called when any order is filled. We're interested in BUY fills
-        on SPY options, which indicate a TP or SL was hit.
+        Note: IBKR only pushes live execDetails to the clientId that placed the
+        order (or the Master API client). TP/SL orders are placed by the trader's
+        clientId, so this may never fire for them - the periodic
+        _process_todays_executions() scan is the safety net.
         """
         try:
-            contract = fill.contract
-            execution = fill.execution
-
-            # Only process SPY option BUY fills (closing trades)
-            if (contract.secType != "OPT" or
-                contract.symbol != "SPY" or
-                execution.side != "BOT"):
-                return
-
-            # Create unique execution ID to avoid processing duplicates
-            exec_id = f"{execution.execId}"
-            if exec_id in self._processed_exec_ids:
-                return
-            self._processed_exec_ids.add(exec_id)
-
-            # Process the closing trade
-            self._process_closing_trade(
-                symbol=contract.symbol,
-                strike=float(contract.strike),
-                expiration=contract.lastTradeDateOrContractMonth,
-                quantity=int(execution.shares),
-                price=float(execution.avgPrice),
-                fill_time=execution.time,
-                exec_id=exec_id,
-            )
-
+            self._handle_fill(fill)
         except Exception as e:
             logger.error(f"Error processing execution: {e}")
 
     def _process_todays_executions(self):
-        """Process any executions from today that we might have missed."""
+        """Scan recent executions (since start of yesterday) for missed closing fills.
+
+        Called on every (re)connect and every EXEC_SYNC_INTERVAL_SECONDS.
+        reqExecutions returns fills from all clientIds, unlike live events.
+        """
+        self._last_exec_sync = time.monotonic()
         try:
             from ib_insync import ExecutionFilter
 
-            today = datetime.now().strftime("%Y%m%d")
-            filt = ExecutionFilter(time=f"{today} 00:00:00")
+            since = (datetime.now() - timedelta(days=EXEC_LOOKBACK_DAYS)).strftime("%Y%m%d")
+            filt = ExecutionFilter(time=f"{since} 00:00:00")
 
             executions = self.ib.reqExecutions(filt)
-            logger.info(f"Checking {len(executions)} executions from today")
+            logger.debug(f"Checking {len(executions)} executions since {since}")
 
             for fill in executions:
-                contract = fill.contract
-                execution = fill.execution
-
-                # Only process SPY option BUY fills
-                if (contract.secType != "OPT" or
-                    contract.symbol != "SPY" or
-                    execution.side != "BOT"):
-                    continue
-
-                exec_id = f"{execution.execId}"
-                if exec_id in self._processed_exec_ids:
-                    continue
-                self._processed_exec_ids.add(exec_id)
-
-                self._process_closing_trade(
-                    symbol=contract.symbol,
-                    strike=float(contract.strike),
-                    expiration=contract.lastTradeDateOrContractMonth,
-                    quantity=int(execution.shares),
-                    price=float(execution.avgPrice),
-                    fill_time=execution.time,
-                    exec_id=exec_id,
-                )
+                self._handle_fill(fill)
 
         except Exception as e:
-            logger.error(f"Error processing today's executions: {e}")
+            logger.error(f"Error processing recent executions: {e}")
+
+    def _handle_fill(self, fill):
+        """Process one fill if it is a not-yet-handled SPY option BUY (TP/SL hit)."""
+        contract = fill.contract
+        execution = fill.execution
+
+        # Only process SPY option BUY fills (closing trades)
+        if (contract.secType != "OPT" or
+                contract.symbol != "SPY" or
+                execution.side != "BOT"):
+            return
+
+        exec_id = f"{execution.execId}"
+        if exec_id in self._processed_exec_ids:
+            return
+
+        handled = self._process_closing_trade(
+            symbol=contract.symbol,
+            strike=float(contract.strike),
+            expiration=contract.lastTradeDateOrContractMonth,
+            quantity=int(execution.shares),
+            price=float(execution.avgPrice),
+            fill_time=execution.time,
+            exec_id=exec_id,
+        )
+        # Only remember the fill once handled, so a transient DB error is retried
+        if handled:
+            self._processed_exec_ids.add(exec_id)
 
     def _process_closing_trade(
         self,
@@ -372,8 +390,13 @@ class IBConnectionManager:
         price: float,
         fill_time: datetime,
         exec_id: str,
-    ):
-        """Process a closing trade (BUY fill) and update database."""
+    ) -> bool:
+        """Process a closing trade (BUY fill) and update database.
+
+        Returns:
+            True if the fill is fully handled (position closed, or nothing to
+            close), False on error so the caller retries on the next scan.
+        """
         try:
             db = Database(DatabaseSettings())
             db.connect()
@@ -398,7 +421,17 @@ class IBConnectionManager:
                         f"No open position found for {symbol} {strike}P {expiration} "
                         f"(may already be closed)"
                     )
-                    return
+                    return True
+
+                # A fill can only close a position that was opened before it.
+                # Guards against replaying an old BUY fill (e.g. after a restart)
+                # onto a newer position on the same contract.
+                if _is_before(fill_time, position.entry_time):
+                    logger.debug(
+                        f"Skipping fill {exec_id} at {fill_time}: older than entry "
+                        f"of position {position.id} ({position.entry_time})"
+                    )
+                    return True
 
                 # Record the closing trade
                 trade = Trade(
@@ -423,14 +456,16 @@ class IBConnectionManager:
 
                 logger.info(
                     f"Recorded closing trade: {symbol} {strike}P @ ${price} "
-                    f"(trade_id={trade_id}, position_id={position.id})"
+                    f"(trade_id={trade_id}, position_id={position.id}, exec_id={exec_id})"
                 )
+                return True
 
             finally:
                 db.disconnect()
 
         except Exception as e:
             logger.error(f"Error recording closing trade: {e}")
+            return False
 
     def _get_position_key(self, symbol: str, strike: float, expiration: str) -> str:
         """Generate a unique key for a position."""
