@@ -103,6 +103,7 @@ class ScheduleSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="SCHEDULE_")
 
+    entries_enabled: bool = True  # False: skip the daily put sale (exits/fills/snapshots keep running)
     trade_at_open: bool = True  # Trade at market open
     trade_time: str = "09:30"  # ET - market open time (used if trade_at_open is True)
     timezone: str = "America/New_York"

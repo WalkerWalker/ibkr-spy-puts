@@ -269,6 +269,7 @@ EXIT_STOP_LOSS_PCT=200.0
 EXIT_ENABLED=true
 
 # Scheduling (prefix: SCHEDULE_)
+SCHEDULE_ENTRIES_ENABLED=true    # false = no new daily put sales (default false in docker-compose.yml since 2026-11-27)
 SCHEDULE_TRADE_AT_OPEN=true      # Trade at market open
 SCHEDULE_TRADE_TIME=09:30        # ET - market open time
 SCHEDULE_TIMEZONE=America/New_York
@@ -470,6 +471,7 @@ GET  /health                 # Health check for monitoring
 | Deployment | Docker + EC2 | 2026-01-11 | Single container with IB Gateway + bot + scheduler + FastAPI dashboard |
 | Order Execution | Adaptive Algo | 2026-01-12 | Use IBKR Adaptive Algo with "Normal" priority for better fills; timeout safety net at 5 min |
 | First Live Trade | SUCCESS | 2026-01-12 | SPY Apr17'26 $630 Put order filled at $5.59 |
+| Strategy stopped | `SCHEDULE_ENTRIES_ENABLED=false` | 2026-11-27 | No new daily entries (compose default false); fill detection, snapshots and dashboard keep running; open puts closed manually at IBKR. Resume: set the compose default (or EC2 `.env`) to `true` and redeploy |
 
 ---
 

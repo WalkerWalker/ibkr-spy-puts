@@ -120,6 +120,8 @@ services:
       # Scheduler
       SCHEDULE_TRADE_TIME: ${SCHEDULE_TRADE_TIME:-09:35}
       SCHEDULE_TIMEZONE: ${SCHEDULE_TIMEZONE:-America/New_York}
+      # Set true to resume daily put entries
+      SCHEDULE_ENTRIES_ENABLED: ${SCHEDULE_ENTRIES_ENABLED:-false}
       # Runtime options
       RUN_MODE: ${RUN_MODE:-all}
       DRY_RUN: ${DRY_RUN:-true}

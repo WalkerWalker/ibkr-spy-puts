@@ -174,6 +174,10 @@ class TradingScheduler:
 
     def _execute_trade(self):
         """Execute the trade if today is a trading day."""
+        if not self.settings.entries_enabled:
+            logger.info("Skipping trade - new entries disabled (SCHEDULE_ENTRIES_ENABLED=false)")
+            return
+
         today = date.today()
 
         if not self.calendar.is_trading_day(today):
@@ -612,6 +616,7 @@ def run_scheduler(
     logger.info("=" * 60)
     logger.info(f"Mode: {'MOCK' if use_mock else 'LIVE'}")
     logger.info(f"Dry Run: {dry_run}")
+    logger.info(f"New entries: {'ENABLED' if schedule_settings.entries_enabled else 'DISABLED'}")
     if not use_mock:
         logger.info(f"TWS Port: {port or settings.tws.port}")
     logger.info(f"Run Immediately: {run_immediately}")
